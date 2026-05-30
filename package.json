@@ -1,0 +1,51 @@
+{
+  "name": "@fatecannotbealtered-/auto-bug-fix",
+  "version": "1.0.0",
+  "description": "Autonomous Jira DC + GitLab bug-fix scheduler — polls Jira for Bugs and dispatches each to your configured AI agent",
+  "keywords": [
+    "jira",
+    "gitlab",
+    "bug-fix",
+    "ai-agent",
+    "cli",
+    "devtools",
+    "automation",
+    "jira-data-center"
+  ],
+  "author": "guosong6886@gmail.com",
+  "homepage": "https://github.com/fatecannotbealtered/auto-bug-fix#readme",
+  "bugs": {
+    "url": "https://github.com/fatecannotbealtered/auto-bug-fix/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fatecannotbealtered/auto-bug-fix.git"
+  },
+  "license": "MIT",
+  "bin": {
+    "auto-bug-fix": "scripts/run.js"
+  },
+  "scripts": {
+    "postinstall": "node scripts/install.js"
+  },
+  "files": [
+    "scripts/install.js",
+    "scripts/run.js",
+    "skills/",
+    "CHANGELOG.md",
+    "CONTRIBUTING.md",
+    "SECURITY.md"
+  ],
+  "os": [
+    "darwin",
+    "linux",
+    "win32"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ],
+  "engines": {
+    "node": ">=16"
+  }
+}

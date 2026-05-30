@@ -1,0 +1,248 @@
+
+# auto-bug-fix
+
+These instructions apply only when the current task explicitly asks you to use `auto-bug-fix`, configure `auto-bug-fix`, or fix a Jira issue through the `auto-bug-fix` workflow. For unrelated Codex tasks, ignore this section.
+
+You have two modes:
+
+1. **Setup mode** — the user asks to install, configure, or set up `auto-bug-fix`.
+2. **Execution mode** — the external launch flow has selected a Jira issue key and asks you to fix it.
+
+## Setup Mode
+
+In setup mode, guide the human through first-time configuration. Do not wait for `auto-bug-fix setup` to ask questions; it is non-interactive.
+
+1. Confirm which agent surface should run future fixes. For Codex, use:
+
+```bash
+auto-bug-fix setup --agent codex
+```
+
+2. Collect the required config values from the human:
+   - `jira.host`
+   - `gitlab.host`
+   - optional `poll.filter`
+   - optional `poll.intervalSeconds`
+   - optional `poll.maxConcurrent`
+   - optional workspace and knowledge settings
+
+3. Edit `~/.auto-bug-fix/config.json`. Keep secrets as `$ENV_VAR` references.
+
+4. Ensure the external CLIs are authenticated:
+
+```bash
+jira-cli doctor --json
+gitlab-cli context --json --compact
+```
+
+5. Explain how to run the poller in the background:
+
+```bash
+auto-bug-fix start --detach   # background; logs to ~/.auto-bug-fix/poller.log
+auto-bug-fix status           # check status
+auto-bug-fix stop             # stop the poller and its in-flight fix agents
+```
+
+Foreground `auto-bug-fix start` remains available for debugging.
+
+Do not print an `AUTO_BUG_FIX_RESULT` marker in setup mode.
+
+## Execution Mode
+
+In execution mode, extract the Jira issue key and process the ticket directly. Do not ask the user to confirm the key, confirm whether to start, or provide additional input.
+
+If the execution task contains no Jira issue key, stop immediately and print:
+
+```text
+AUTO_BUG_FIX_RESULT outcome=needs-info
+```
+
+## Tools
+
+You drive `jira-cli`, `gitlab-cli`, and optionally `kibana-cli`. They are agent-oriented — work with them, do not fight them:
+
+- Always request machine output: `jira-cli ... --json`; `gitlab-cli ... --json --compact`.
+- **The commands in this file are illustrative shapes, not fixed scripts.** Confirm the exact subcommands and flags for the installed version with `jira-cli reference` and `gitlab-cli reference --json --compact` (or `--help`) instead of guessing a flag.
+- The shell snippets are POSIX — **translate them to the OS you are running on** (PowerShell on Windows, etc.).
+- `gitlab-cli` write commands may require `--confirm <token>` after a `--dry-run --json` preview; the dry-run or error output gives you the token.
+- Credentials are already configured in the environment. Never print, inject, or hard-code tokens.
+
+## Behavioral Guidelines
+
+**Think Before Coding:** State your assumptions explicitly, then route each by whether you can verify it yourself:
+- **Verifiable from the code, tests, or logs** → confirm it, proceed, and record the assumption and how you confirmed it in the MR description. Do not ask the human about things you can check yourself.
+- **Not verifiable — it depends on product intent, expected behavior, or a business rule only a human knows** → do not guess and bury it in an MR. Stop, ask the specific question on Jira, and return `needs-info` without opening an MR (see the Confidence Gate).
+
+**Simplicity First:** Minimum code that solves the problem. No features beyond what was asked. No speculative abstractions. If 200 lines could be 50, rewrite it.
+
+**Surgical Changes:** Touch only what you must. Don't improve adjacent code. Don't refactor things that aren't broken. Match existing style. Every changed line traces directly to the request.
+
+**Goal-Driven Execution:** For bug fixes — write a test that reproduces the bug first, then make it pass. That is the success criterion.
+
+## Operation Boundaries
+
+**Always (no confirmation needed):** read tickets, read code, query Kibana, run tests locally.
+
+**Never (hard stops):** merge MRs, close tickets, delete branches, modify CI/CD pipelines, push directly to the default branch.
+
+**Do not auto-fix if:** the fix touches more than 5 files, modifies shared configuration, or changes test infrastructure. Use `auto-diagnose` or `needs-info` instead of asking the user.
+
+## Success Criteria
+
+A fix is complete when:
+1. A new test reproduces the original bug and now passes (fail-to-pass).
+2. All pre-existing tests still pass (pass-to-pass).
+3. The MR description explains root cause, what changed, why, and any assumptions made.
+
+## Jira Comment Template
+
+Only comment at key checkpoints. Always use this format:
+
+```
+【问题原因】
+<root cause analysis>
+
+【解决方案】
+<fix summary, MR link, or blocker description>
+```
+
+Write in **business language**, not technical jargon. The audience is product managers and QA, not engineers.
+
+- 【问题原因】: Describe *what scenario causes what problem* — not the code location or exception name.
+  - ❌ "NullPointerException in ConfigService.getParam() at line 42"
+  - ✅ "配置参数为空时系统未做判断，导致接口报错"
+- 【解决方案】: Describe *what was fixed and what the effect is* — not how it was implemented.
+  - ❌ "Added null check before accessing param map"
+  - ✅ "已增加空值判断，修复后接口正常返回。MR：<link>"
+
+## Confidence Gate and Result Types
+
+After root-cause analysis (Steps 3–4), choose exactly one result type before writing any code:
+
+- **auto-fix** — root cause is clear, the change is localized to one service, and a test can verify it. Proceed with code, tests, MR, and Jira update.
+- **auto-diagnose** — evidence points to a cause or responsible service, but the fix is risky, cross-service, architectural, or unsafe for autonomous editing. Do not create an MR. Post the diagnosis, evidence, and recommended next step in Jira.
+- **needs-info** — reproduction, expected behavior, ownership, or product rule is unclear. Do not create an MR. Ask specific, answerable questions in Jira and transition to a needs-info state when available.
+
+Only **auto-fix** may modify code or create an MR. For every result type, finish by printing one audit marker line:
+
+```text
+AUTO_BUG_FIX_RESULT outcome=auto-fix mr=<MR_URL>
+AUTO_BUG_FIX_RESULT outcome=auto-diagnose handoff=<repo-relative-handoff-path>
+AUTO_BUG_FIX_RESULT outcome=needs-info handoff=<repo-relative-handoff-path>
+```
+
+## Repo Knowledge and Handoff
+
+The poller injects repo-local knowledge settings:
+
+- `AUTO_BUG_FIX_KNOWLEDGE_DIR` — directory to read/update, default `.tcl`.
+- `AUTO_BUG_FIX_KNOWLEDGE_READ` — read existing knowledge before analysis, default `true`.
+- `AUTO_BUG_FIX_KNOWLEDGE_UPDATE` — update durable knowledge after a confirmed fix, default `true`.
+- `AUTO_BUG_FIX_KNOWLEDGE_HANDOFF` — write a local handoff file when business meaning is unclear, default `true`.
+- `AUTO_BUG_FIX_KNOWLEDGE_HANDOFF_DIR` — handoff subdirectory under the knowledge dir, default `handoff`.
+
+Use this directory for reusable business meaning only: domain terms, product rules, workflow constraints, ownership notes, invariants, and integration contracts. Do not record one-off bug narratives.
+
+If a fix reveals durable business knowledge, update or add a concise Markdown file under the knowledge directory and include it in the MR when `AUTO_BUG_FIX_KNOWLEDGE_UPDATE=true`.
+
+If business meaning is unclear and blocks an autonomous fix, create a local handoff file when `AUTO_BUG_FIX_KNOWLEDGE_HANDOFF=true`: `<knowledge_dir>/<handoff_dir>/<TICKET_KEY>.needs-confirmation.md`. Include ticket context, evidence, exact questions, and the suggested target knowledge file. Do not commit this handoff file unless a human explicitly asks. Print its repo-relative path in the audit marker with `handoff=<path>`.
+
+## When Information Is Missing
+
+Do not guess. Post a Jira comment using the template, then transition the ticket:
+
+```bash
+jira-cli issue comment add <TICKET_KEY> --body "【问题原因】\n<what is unclear>\n\n【解决方案】\n<specific questions that need answers>" --json
+jira-cli issue transitions <TICKET_KEY> --json
+jira-cli issue transition <TICKET_KEY> "<needs-info state>"
+```
+
+Then stop. Re-activation is not automatic: the poller dedupes by issue key and does not read your comment. After the human replies, re-run `auto-bug-fix fix <TICKET_KEY>` to retry, or set `poll.stateExpiryDays > 0` so the poller retries waiting issues after that many days.
+
+## Workflow
+
+Each step states its intent first; the commands are minimal verified examples — confirm exact flags and adapt to your OS as described under Tools.
+
+### Step 1 — Read the ticket
+
+```bash
+jira-cli issue get <TICKET_KEY> --json
+```
+
+Extract `serviceName` (GitLab repo), `errorKeywords` (exception/log fragments), and `environment`. If the ticket does not name a repo, find it:
+
+```bash
+gitlab-cli search projects --query "<keyword-from-description>" --json
+```
+
+### Step 2 — Prepare the workspace and read the source code
+
+1. Resolve the repo: `gitlab-cli project get <serviceName> --json`. From the result read the clone URL (`ssh_url_to_repo` / `http_url_to_repo`) **and `default_branch` — do not assume the default branch is `main`.**
+2. Clone into (or reuse) `$AUTO_BUG_FIX_WORKSPACE_ROOT/<TICKET_KEY>/<serviceName>`, fetch the latest default branch, then create a work branch `fix/<TICKET_KEY>-<short-desc>` off it.
+3. Read the class/method in the stack trace, the surrounding logic, and the existing test files.
+4. If `AUTO_BUG_FIX_KNOWLEDGE_READ=true`, read durable knowledge under `$AUTO_BUG_FIX_KNOWLEDGE_DIR` (default `.tcl`), excluding the handoff subdirectory. Ignore the directory if it is absent.
+
+### Step 3 — Root cause analysis (code first)
+
+Determine the root cause from code alone. Clear → skip to Step 5. Inconclusive → Step 4.
+
+### Step 4 — Query Kibana (only if Step 3 is inconclusive and kibana-cli is configured)
+
+Search production logs for the error and analyse frequency, stack traces, and timing, e.g.:
+
+```bash
+kibana-cli search --index "app-logs-*" --query "<errorKeyword>" --last 24h --service <serviceName> --json
+```
+
+If still inconclusive → apply the Confidence Gate.
+
+### Step 5 — Write the minimal fix
+
+Change only what the root cause requires. Do not refactor unrelated code. Do not commit yet.
+
+### Step 6 — Reproduce and verify with tests
+
+Write a test that reproduces the bug (it must fail before the fix), then make it pass. Run the project's native test command locally and keep the pre-existing suite green. Iterate fix/test per the retry policy in Failure Handling.
+
+### Step 6.5 — Update knowledge or write a handoff
+
+If the run is `auto-fix` and it confirmed reusable business knowledge, update `$AUTO_BUG_FIX_KNOWLEDGE_DIR` when `AUTO_BUG_FIX_KNOWLEDGE_UPDATE=true` — keep it short and business-oriented. If the run is `auto-diagnose` or `needs-info` because product meaning is unclear, write the handoff file when `AUTO_BUG_FIX_KNOWLEDGE_HANDOFF=true` and report `handoff=<path>` in the final marker.
+
+### Step 7 — Commit, push, and open the MR
+
+Commit on the work branch, push it, then open the MR against the repo's default branch:
+
+```bash
+git commit -m "fix: <short description> (<TICKET_KEY>)"
+git push -u origin fix/<TICKET_KEY>-<short-desc>
+
+gitlab-cli mr create --project <serviceName> \
+  --source-branch fix/<TICKET_KEY>-<short-desc> \
+  --target-branch <default_branch> \
+  --title "fix: <short description> (<TICKET_KEY>)" \
+  --json --compact
+```
+
+Include root cause, what changed, and the verifying test in the MR description (confirm the description flag via `gitlab-cli reference`). Record the MR `webUrl`.
+
+### Step 8 — Update Jira
+
+List the available transitions first, move the ticket to an in-progress state, then comment using the Jira Comment Template with the MR link:
+
+```bash
+jira-cli issue transitions <TICKET_KEY> --json
+jira-cli issue transition <TICKET_KEY> "In Progress"
+jira-cli issue comment add <TICKET_KEY> --body "【问题原因】\n<root cause>\n\n【解决方案】\n<MR_URL>\n\nAll tests pass (fail-to-pass + pass-to-pass). Awaiting review." --json
+```
+
+Honor `AUTO_BUG_FIX_WORKSPACE_CLEANUP`: `keep` leaves the local workspace for debugging; `on-success` removes `$AUTO_BUG_FIX_WORKSPACE_ROOT/<TICKET_KEY>` after the MR is created; `always` may remove it before exit.
+
+## Failure Handling
+
+Retry policy (single source of truth): for test failures, compile errors, or transient CLI errors (network timeout, rate limit), retry up to **3 times**, then apply the Confidence Gate and stop.
+
+Stop immediately — do not retry — and post a Jira comment using the template for any of:
+- GitLab repo not found
+- Jira ticket does not exist or is inaccessible
+- Insufficient permissions (cannot create branch, cannot open MR)
+- Root cause requires an architectural change or product decision

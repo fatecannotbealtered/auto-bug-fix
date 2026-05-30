@@ -1,0 +1,25 @@
+# Binaries
+/auto-bug-fix
+/auto-bug-fix.exe
+auto-bug-fix-test
+auto-bug-fix-test.exe
+dist/
+bin/
+
+# npm (binary wrapper for distribution)
+node_modules/
+*.tgz
+
+# Go build cache
+*.test
+*.out
+
+# Config with real credentials (never commit)
+config.json
+*.local.json
+.env
+
+# IDE
+.idea/
+.vscode/
+*.swp

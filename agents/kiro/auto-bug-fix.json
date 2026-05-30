@@ -1,0 +1,9 @@
+{
+  "name": "auto-bug-fix",
+  "description": "Autonomous bug-fix agent for Jira + GitLab. Given a Jira issue key, reads the ticket, finds the GitLab repo, analyses the code, writes a targeted fix, runs tests, creates a MR, and updates the ticket.",
+  "tools": ["fs_read", "fs_write", "execute_bash", "grep", "glob"],
+  "allowedTools": ["fs_read", "fs_write", "execute_bash", "grep", "glob"],
+  "resources": [
+    "skill://~/.kiro/skills/auto-bug-fix/SKILL.md"
+  ]
+}

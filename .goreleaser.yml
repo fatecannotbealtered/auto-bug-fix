@@ -1,0 +1,43 @@
+version: 2
+
+project_name: auto-bug-fix
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  # main.go lives at the repo root (package main), so build the module root.
+  - main: .
+    binary: auto-bug-fix
+    env:
+      - CGO_ENABLED=0
+    ldflags:
+      - -s -w -X github.com/fatecannotbealtered/auto-bug-fix/cmd.version={{ .Version }}
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    # Windows ARM64 is not built natively; the install script falls back to
+    # the amd64 binary which runs via Windows x64 emulation on ARM devices.
+    ignore:
+      - goos: windows
+        goarch: arm64
+
+archives:
+  - formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    name_template: "{{ .ProjectName }}-{{ .Version }}-{{ .Os }}-{{ .Arch }}"
+    wrap_in_directory: false
+    files:
+      - none*
+
+checksum:
+  name_template: checksums.txt

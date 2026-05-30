@@ -1,0 +1,4 @@
+# Normalize line endings across platforms: store and check out text as LF.
+# Keeps Go sources, shell/JS scripts, the Makefile, and YAML consistent so
+# CRLF from a Windows contributor never breaks builds on Linux/macOS.
+* text=auto eol=lf

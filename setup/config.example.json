@@ -1,0 +1,40 @@
+{
+  "agent": {
+    "agentType": "kiro",
+    "command": "kiro-cli chat --no-interactive --trust-all-tools --agent auto-bug-fix \"Fix bug {issueKey}\""
+  },
+  "poll": {
+    "intervalSeconds": 300,
+    "maxConcurrent": 3,
+    "stateExpiryDays": 0,
+    "filter": {
+      "titleContains": "",
+      "assignedToMe": true,
+      "excludeStatuses": []
+    }
+  },
+  "workspace": {
+    "root": "$HOME/.auto-bug-fix/workspaces",
+    "cleanup": "keep"
+  },
+  "knowledge": {
+    "dir": ".tcl",
+    "read": true,
+    "update": true,
+    "handoff": true,
+    "handoffDir": "handoff"
+  },
+  "jira": {
+    "host": "https://jira.example.com",
+    "token": "$JIRA_TOKEN"
+  },
+  "gitlab": {
+    "host": "https://gitlab.example.com",
+    "token": "$GITLAB_TOKEN"
+  },
+  "kibana": {
+    "host": "$KIBANA_HOST",
+    "user": "$KIBANA_USER",
+    "password": "$KIBANA_PASSWORD"
+  }
+}
