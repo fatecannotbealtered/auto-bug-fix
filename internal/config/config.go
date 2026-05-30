@@ -219,15 +219,28 @@ func Load(path string) (Config, error) {
 	return cfg, nil
 }
 
+// KnownAgentType reports whether agentType is one whose launch command can be
+// derived automatically (so agent.command may be omitted).
+func KnownAgentType(agentType string) bool {
+	switch agentType {
+	case "kiro", "cursor", "claude-code", "codex":
+		return true
+	default:
+		return false
+	}
+}
+
 // Validate checks required fields and constraints. It deliberately does NOT
 // require jira/gitlab/kibana hosts or tokens: authentication and connectivity
 // are each sibling CLI's own responsibility (jira-cli/gitlab-cli/kibana-cli),
 // verified at runtime by `auto-bug-fix doctor`, not stored in this config.
 func Validate(cfg Config) error {
-	if strings.TrimSpace(cfg.Agent.Command) == "" {
-		return fmt.Errorf("agent.command is required")
+	// agentType is primary: a known type derives its command at runtime, so an
+	// explicit agent.command is only required for a custom/unknown agent.
+	if strings.TrimSpace(cfg.Agent.Command) == "" && !KnownAgentType(cfg.Agent.AgentType) {
+		return fmt.Errorf("agent.agentType must be one of kiro/cursor/claude-code/codex, or set a custom agent.command")
 	}
-	if cfg.Agent.AgentType != "" && cfg.Agent.AgentType != "kiro" && cfg.Agent.AgentType != "cursor" && cfg.Agent.AgentType != "claude-code" && cfg.Agent.AgentType != "codex" {
+	if cfg.Agent.AgentType != "" && !KnownAgentType(cfg.Agent.AgentType) {
 		return fmt.Errorf("agent.agentType must be \"kiro\", \"cursor\", \"claude-code\", \"codex\", or empty")
 	}
 	if cfg.Poll.IntervalSeconds < 0 {

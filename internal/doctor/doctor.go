@@ -10,6 +10,7 @@ import (
 
 	"github.com/fatecannotbealtered/auto-bug-fix/internal/agent"
 	"github.com/fatecannotbealtered/auto-bug-fix/internal/config"
+	"github.com/fatecannotbealtered/auto-bug-fix/internal/installer"
 )
 
 type Level int
@@ -74,6 +75,9 @@ func Run(cfg config.Config, cfgErr error, look LookPath, probe Probe, tmpl Templ
 	}
 
 	checks = append(checks, agentTemplateCheck(tmpl, cfg.Agent.AgentType))
+	if c, ok := commandDriftCheck(cfg.Agent); ok {
+		checks = append(checks, c)
+	}
 
 	checks = append(checks,
 		lookCheck(look, "git", "git", true),
@@ -138,6 +142,19 @@ func capabilityCheck(look LookPath, probe Probe, bin string, required bool) Chec
 		return Check{bin, failLevel(required), "not usable; run `" + bin + " doctor`"}
 	}
 	return Check{bin, failLevel(required), "not authenticated; run `" + bin + " auth login`"}
+}
+
+// commandDriftCheck warns when a known agentType also has an explicit
+// agent.command that differs from the derived one: the explicit command wins but
+// won't track template/upgrade changes. Returns ok=false (no check) otherwise.
+func commandDriftCheck(a config.AgentConfig) (Check, bool) {
+	if !config.KnownAgentType(a.AgentType) {
+		return Check{}, false
+	}
+	if a.Command != "" && a.Command != installer.AgentCommand(a.AgentType) {
+		return Check{"agent command", Warn, "explicit agent.command overrides the command derived from agentType=" + a.AgentType + "; remove it to always match the installed subagent"}, true
+	}
+	return Check{}, false
 }
 
 func failLevel(required bool) Level {

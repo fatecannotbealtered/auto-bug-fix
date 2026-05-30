@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -137,10 +138,10 @@ func runSetup(args []string) {
 
 	fmt.Printf("Config created at %s\n", *cfgPath)
 	if *agentType == "" {
-		fmt.Println("Next: fill in agent.command and poll.filter, then authenticate jira-cli and gitlab-cli (`jira-cli login`, `gitlab-cli auth login`) and run `auto-bug-fix doctor`.")
+		fmt.Println("Next: fill in agent.command (custom agent) and poll.filter, then authenticate jira-cli and gitlab-cli (`jira-cli login`, `gitlab-cli auth login`) and run `auto-bug-fix doctor`.")
 	} else {
 		fmt.Println("Next: set poll.filter, then authenticate jira-cli and gitlab-cli (`jira-cli login`, `gitlab-cli auth login`) and run `auto-bug-fix doctor`.")
-		fmt.Printf("Agent command pre-filled: %s\n", installer.AgentCommand(*agentType))
+		fmt.Printf("Launch command is derived from agentType=%s at runtime: %s\n", *agentType, installer.AgentCommand(*agentType))
 	}
 }
 
@@ -182,11 +183,15 @@ func installAgentTemplate(agentType string) {
 }
 
 func defaultConfig(agentType string) map[string]any {
+	// A known agentType derives its command at runtime, so we store only the
+	// type. A bare setup (no agentType) writes an empty command for the user to
+	// fill — the custom escape hatch.
+	agent := map[string]any{"agentType": agentType}
+	if !config.KnownAgentType(agentType) {
+		agent["command"] = ""
+	}
 	return map[string]any{
-		"agent": map[string]any{
-			"agentType": agentType,
-			"command":   installer.AgentCommand(agentType),
-		},
+		"agent": agent,
 		"poll": map[string]any{
 			"intervalSeconds": 300,
 			"maxConcurrent":   config.DefaultPollMaxConcurrent,
@@ -436,6 +441,16 @@ func templateProbe(agentType string) ([]string, bool) {
 	return missing, true
 }
 
+// resolveAgentCommand derives agent.command from agentType when no explicit
+// command is set, so a known agentType always launches the matching subagent and
+// cannot drift from the installed template. An explicit command (custom escape
+// hatch) is left untouched.
+func resolveAgentCommand(cfg *config.Config) {
+	if strings.TrimSpace(cfg.Agent.Command) == "" {
+		cfg.Agent.Command = installer.AgentCommand(cfg.Agent.AgentType)
+	}
+}
+
 // preflight loads + validates config and runs doctor checks. It aborts the
 // process when any required check fails, so we never spawn an agent into a
 // broken environment (missing/unusable CLI, invalid config). Returns the config.
@@ -444,6 +459,7 @@ func preflight(cfgPath string) config.Config {
 	if err == nil {
 		err = config.Validate(cfg)
 	}
+	resolveAgentCommand(&cfg)
 	checks := doctor.Run(cfg, err, exec.LookPath, cliProbe, templateProbe)
 	failed := doctor.HasFailure(checks)
 	// Surface every non-OK check: FAIL blocks, WARN is a reminder (e.g. an
@@ -478,6 +494,7 @@ func runDoctor(args []string) {
 	if err == nil {
 		err = config.Validate(cfg)
 	}
+	resolveAgentCommand(&cfg)
 
 	checks := doctor.Run(cfg, err, exec.LookPath, cliProbe, templateProbe)
 	ok := !doctor.HasFailure(checks)

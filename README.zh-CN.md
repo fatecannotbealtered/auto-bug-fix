@@ -90,14 +90,18 @@ auto-bug-fix fix PROJ-123
 
 ## Agent 命令
 
-auto-bug-fix 不内置 agent——发现匹配 issue 时，它只 spawn 你在 `agent.command` 中配置的那条命令，由该 agent 按已安装的 `auto-bug-fix` skill 工作流完成修复。
+auto-bug-fix 不内置 agent——发现匹配 issue 时，它只 spawn 一条命令，由该 agent 按已安装的 `auto-bug-fix` skill 工作流完成修复。
 
-| Agent | `agent.command` |
+对受支持的 `agent.agentType`，这条命令是**自动推导**的（始终与已安装的 subagent 模板一致，升级也不会漂移）；你只需通过 `setup --agent` 选类型：
+
+| `agentType` | 推导出的命令 |
 |-------|-----------------|
-| Codex | `codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check "Fix bug {issueKey} using the auto-bug-fix skill"` |
-| Claude Code | `claude --agent auto-bug-fix -p "Fix bug {issueKey}" --permission-mode acceptEdits` |
-| Cursor | `cursor-agent --print --force "Fix bug {issueKey} using the auto-bug-fix workflow"` |
-| 自定义脚本 | `/path/to/fix.sh`（key 作为 `$1` 追加） |
+| `kiro` | `kiro-cli chat --no-interactive --trust-all-tools --agent auto-bug-fix "Fix bug {issueKey}"` |
+| `codex` | `codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check "Fix bug {issueKey} using the auto-bug-fix skill"` |
+| `claude-code` | `claude --agent auto-bug-fix -p "Fix bug {issueKey}" --permission-mode acceptEdits` |
+| `cursor` | `cursor-agent --print --force "Fix bug {issueKey} using the auto-bug-fix workflow"` |
+
+其他 agent：把 `agentType` 留空，自己设**自定义 `agent.command`**（如 `/path/to/fix.sh`，key 作为 `$1` 追加）。若两者都设，显式命令生效且 `doctor` 会就此覆盖给出 WARN。
 
 **占位符替换**：命令含 `{issueKey}` 时，所有出现处都被替换为 Jira key（包括嵌在带引号的 prompt 中）；没有占位符则把 key 作为最后一个参数追加。
 

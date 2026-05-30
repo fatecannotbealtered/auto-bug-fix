@@ -17,6 +17,7 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- **`agent.agentType` is now primary; `agent.command` is derived at runtime.** For a known `agentType` (kiro/cursor/claude-code/codex) the launch command is computed from it on every run, so it always matches the installed subagent template and cannot drift across upgrades. An explicit `agent.command` is only needed for a custom/unknown agent (escape hatch) and, when set alongside a known `agentType`, `doctor` warns that it overrides the derived command. `setup --agent` no longer writes a `command` into config.
 - **Config no longer stores or requires Jira/GitLab/Kibana hosts or tokens.** Those fields are removed from the config schema entirely. Authentication is each sibling CLI's own responsibility (`jira-cli login`, `gitlab-cli auth login`, `kibana-cli auth login`); `auto-bug-fix doctor` verifies usability without reading secrets. `setup` no longer writes credential blocks, and `Validate` no longer requires them.
 
 ---

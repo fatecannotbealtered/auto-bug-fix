@@ -36,7 +36,7 @@ AUTO_BUG_FIX_RESULT outcome=needs-info
    - Claude Code: `auto-bug-fix setup --agent claude-code`
    - Codex: `auto-bug-fix setup --agent codex`
 
-   Setup installs that agent's instructions and creates `~/.auto-bug-fix/config.json` with `agent.command` pre-filled. If no agent type is known yet, run `auto-bug-fix setup` to create a generic config template and fill `agent.command` yourself.
+   Setup installs that agent's instructions and creates `~/.auto-bug-fix/config.json` with `agent.agentType` set; the launch command is **derived from `agentType` at runtime** (no `agent.command` is written). If no agent type fits, run `auto-bug-fix setup` to create a generic template and set a custom `agent.command` yourself.
 
 2. **Collect the remaining required values by asking the human** — do not invent them:
    - `poll.filter` — ask three plain questions (all optional; skip = use default):
@@ -51,7 +51,7 @@ AUTO_BUG_FIX_RESULT outcome=needs-info
    - `knowledge.read` / `knowledge.update` / `knowledge.handoff` — default `true`.
    - `knowledge.handoffDir` — subdirectory under `knowledge.dir` for confirmation handoff files (default `handoff`).
 
-3. **Write command, poll config, workspace config, and knowledge config into the file.** Edit `agent.command` / `poll.filter` / `workspace.*` / `knowledge.*` directly in `config.json`. The config holds **no** Jira/GitLab/Kibana hosts or tokens — those are not stored here.
+3. **Write poll config, workspace config, and knowledge config into the file.** Edit `poll.filter` / `workspace.*` / `knowledge.*` directly in `config.json`. For a known `agentType` you do **not** set `agent.command` — it is derived; only set `agent.command` for a custom agent (`agentType` empty). The config holds **no** Jira/GitLab/Kibana hosts or tokens — those are not stored here.
 
 4. **Authenticate the capability CLIs (their own concern, not this config).** Make sure `jira-cli login` and `gitlab-cli auth login` are done on the machine that runs the poller; `kibana-cli auth login` is optional (only needed for the log-lookup step). You do not put their tokens in `config.json`.
 

@@ -193,6 +193,23 @@ func TestValidate_MissingRequiredFields(t *testing.T) {
 		})
 	}
 }
+func TestValidate_KnownAgentTypeAllowsEmptyCommand(t *testing.T) {
+	cfg := validConfig()
+	cfg.Agent.Command = ""
+	cfg.Agent.AgentType = "kiro"
+	if err := config.Validate(cfg); err != nil {
+		t.Fatalf("known agentType with empty command must be valid: %v", err)
+	}
+}
+
+func TestValidate_NoCommandAndNoAgentTypeFails(t *testing.T) {
+	cfg := validConfig()
+	cfg.Agent.Command = ""
+	cfg.Agent.AgentType = ""
+	if err := config.Validate(cfg); err == nil {
+		t.Fatal("empty command with unknown agentType must fail")
+	}
+}
 
 func TestValidate_PollInvalidInterval(t *testing.T) {
 	cfg := validConfig()

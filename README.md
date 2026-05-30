@@ -90,14 +90,18 @@ auto-bug-fix fix PROJ-123
 
 ## Agent command
 
-auto-bug-fix doesn't embed an agent — when a matching issue is found, it spawns the single command you set in `agent.command` and lets that agent do the work, using the workflow from the installed `auto-bug-fix` skill.
+auto-bug-fix doesn't embed an agent — when a matching issue is found, it spawns one command and lets that agent do the work, using the workflow from the installed `auto-bug-fix` skill.
 
-| Agent | `agent.command` |
+For a supported `agent.agentType`, that command is **derived automatically** (so it always matches the installed subagent template — no drift on upgrade); you only choose the type via `setup --agent`:
+
+| `agentType` | Derived command |
 |-------|-----------------|
-| Codex | `codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check "Fix bug {issueKey} using the auto-bug-fix skill"` |
-| Claude Code | `claude --agent auto-bug-fix -p "Fix bug {issueKey}" --permission-mode acceptEdits` |
-| Cursor | `cursor-agent --print --force "Fix bug {issueKey} using the auto-bug-fix workflow"` |
-| Custom script | `/path/to/fix.sh` (key appended as `$1`) |
+| `kiro` | `kiro-cli chat --no-interactive --trust-all-tools --agent auto-bug-fix "Fix bug {issueKey}"` |
+| `codex` | `codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check "Fix bug {issueKey} using the auto-bug-fix skill"` |
+| `claude-code` | `claude --agent auto-bug-fix -p "Fix bug {issueKey}" --permission-mode acceptEdits` |
+| `cursor` | `cursor-agent --print --force "Fix bug {issueKey} using the auto-bug-fix workflow"` |
+
+For any other agent, leave `agentType` empty and set a **custom `agent.command`** yourself (e.g. `/path/to/fix.sh`, key appended as `$1`). If you set both, the explicit command wins and `doctor` warns about the override.
 
 **Substitution:** if the command contains `{issueKey}`, every occurrence is replaced with the Jira key (including inside a quoted prompt). If it does not, the key is appended as the last argument.
 

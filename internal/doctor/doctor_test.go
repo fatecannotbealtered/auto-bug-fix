@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/fatecannotbealtered/auto-bug-fix/internal/config"
+	"github.com/fatecannotbealtered/auto-bug-fix/internal/installer"
 )
 
 func lookFake(present map[string]bool) LookPath {
@@ -172,6 +173,26 @@ func TestRun_WorkspaceSurfacedAsInfo(t *testing.T) {
 	}
 	if got := levelOf(checks, "workspace"); got != Info {
 		t.Errorf("workspace should be INFO, got %v", got)
+	}
+}
+
+func TestRun_CommandDriftWarns(t *testing.T) {
+	// known agentType but an explicit command that differs from the derived one
+	cfg := cfgWith("kiro-cli --custom \"{issueKey}\"", "kiro")
+	checks := Run(cfg, nil, lookFake(allPresent()), probeFake(allAuthed()), tmplInstalled)
+	if HasFailure(checks) {
+		t.Fatalf("command drift is a warning, not a failure: %+v", checks)
+	}
+	if got := levelOf(checks, "agent command"); got != Warn {
+		t.Errorf("explicit override should Warn, got %v", got)
+	}
+}
+
+func TestRun_DerivedCommandNoDrift(t *testing.T) {
+	cfg := cfgWith(installer.AgentCommand("kiro"), "kiro")
+	checks := Run(cfg, nil, lookFake(allPresent()), probeFake(allAuthed()), tmplInstalled)
+	if got := levelOf(checks, "agent command"); got != -1 {
+		t.Errorf("derived command should add no drift check, got level %v", got)
 	}
 }
 
