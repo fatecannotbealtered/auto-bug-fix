@@ -180,10 +180,6 @@ func TestValidate_MissingRequiredFields(t *testing.T) {
 		name   string
 		mutate func(*config.Config)
 	}{
-		{"no jira.host", func(c *config.Config) { c.Jira.Host = "" }},
-		{"no jira.token", func(c *config.Config) { c.Jira.Token = "" }},
-		{"no gitlab.host", func(c *config.Config) { c.GitLab.Host = "" }},
-		{"no gitlab.token", func(c *config.Config) { c.GitLab.Token = "" }},
 		{"no agent.command", func(c *config.Config) { c.Agent.Command = "" }},
 		{"blank agent.command", func(c *config.Config) { c.Agent.Command = "   " }},
 	}
@@ -198,11 +194,12 @@ func TestValidate_MissingRequiredFields(t *testing.T) {
 	}
 }
 
-func TestValidate_PartialKibana(t *testing.T) {
+func TestValidate_KibanaNotValidatedHere(t *testing.T) {
+	// Kibana auth is kibana-cli's own concern; config no longer validates it.
 	cfg := validConfig()
 	cfg.Kibana.Host = "https://kibana.example.com"
-	if err := config.Validate(cfg); err == nil {
-		t.Fatal("expected error for partial kibana config")
+	if err := config.Validate(cfg); err != nil {
+		t.Fatalf("kibana creds must not be required by config: %v", err)
 	}
 }
 

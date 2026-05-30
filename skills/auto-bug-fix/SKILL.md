@@ -39,8 +39,6 @@ AUTO_BUG_FIX_RESULT outcome=needs-info
    Setup installs that agent's instructions and creates `~/.auto-bug-fix/config.json` with `agent.command` pre-filled. If no agent type is known yet, run `auto-bug-fix setup` to create a generic config template and fill `agent.command` yourself.
 
 2. **Collect the remaining required values by asking the human** — do not invent them:
-   - `jira.host` — their Jira Data Center base URL
-   - `gitlab.host` — their GitLab base URL
    - `poll.filter` — ask three plain questions (all optional; skip = use default):
      1. **标题关键词？** (`titleContains`) — only process Bugs whose title contains this string. Leave blank = process all Bugs.
      2. **只处理分配给我的 Bug？** (`assignedToMe`) — default `true`.
@@ -53,11 +51,9 @@ AUTO_BUG_FIX_RESULT outcome=needs-info
    - `knowledge.read` / `knowledge.update` / `knowledge.handoff` — default `true`.
    - `knowledge.handoffDir` — subdirectory under `knowledge.dir` for confirmation handoff files (default `handoff`).
 
-3. **Write hosts, command, poll config, workspace config, and knowledge config into the file; keep secrets in env vars.** Edit `jira.host` / `gitlab.host` / `agent.command` / `poll.filter` / `workspace.*` / `knowledge.*` directly in `config.json`. For every `$VAR` placeholder (`$JIRA_TOKEN`, `$GITLAB_TOKEN`, Kibana creds), do **not** hard-code the secret — instruct the human to set that environment variable in the shell that runs the poller.
+3. **Write command, poll config, workspace config, and knowledge config into the file.** Edit `agent.command` / `poll.filter` / `workspace.*` / `knowledge.*` directly in `config.json`. The config holds **no** Jira/GitLab/Kibana hosts or tokens — those are not stored here.
 
-   **Important — env vars are session-scoped by default.** Remind the human to persist them so the poller survives restarts. Recommended: create a startup script (e.g. `start.ps1` on Windows, `start.sh` on Linux/macOS) that sets all env vars and then runs `auto-bug-fix start`. Store this script outside version control.
-
-4. **Kibana is optional.** Only fill the `kibana.*` block if they use it; otherwise leave the placeholders and Step 4 of the workflow is skipped at runtime.
+4. **Authenticate the capability CLIs (their own concern, not this config).** Make sure `jira-cli login` and `gitlab-cli auth login` are done on the machine that runs the poller; `kibana-cli auth login` is optional (only needed for the log-lookup step). You do not put their tokens in `config.json`.
 
 5. **Start the poller in the background.** From the machine that will run it:
 

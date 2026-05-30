@@ -1,9 +1,13 @@
-// Package doctor runs read-only preflight checks: config validity and the
-// presence of required external CLIs on PATH. It makes no network calls — each
-// tool's own `doctor`/`login` owns authentication and connectivity.
+// Package doctor runs preflight checks. It verifies config validity, that the
+// agent CLI and git are on PATH, and that the capability CLIs (jira-cli,
+// gitlab-cli, kibana-cli) are actually usable by delegating to each one's own
+// `doctor --json` (authentication/connectivity is each CLI's responsibility, not
+// stored in this tool's config).
 package doctor
 
 import (
+	"encoding/json"
+
 	"github.com/fatecannotbealtered/auto-bug-fix/internal/agent"
 	"github.com/fatecannotbealtered/auto-bug-fix/internal/config"
 )
@@ -37,9 +41,19 @@ type Check struct {
 // LookPath matches exec.LookPath; injectable for tests.
 type LookPath func(string) (string, error)
 
-// Run returns the preflight checks for cfg. cfgErr is the error from loading
-// and validating config (nil when it loaded and validated cleanly).
-func Run(cfg config.Config, cfgErr error, look LookPath) []Check {
+// Probe runs a CLI and returns its stdout; injectable for tests. Implementations
+// should return stdout even on a non-zero exit so JSON output can be parsed.
+type Probe func(bin string, args ...string) ([]byte, error)
+
+// cliHealth is the JSON shape shared by the sibling CLIs' `doctor --json`.
+type cliHealth struct {
+	AuthValid bool   `json:"authValid"`
+	Host      string `json:"host"`
+}
+
+// Run returns the preflight checks for cfg. cfgErr is the error from loading and
+// validating config (nil when it loaded and validated cleanly).
+func Run(cfg config.Config, cfgErr error, look LookPath, probe Probe) []Check {
 	checks := []Check{configCheck(cfgErr)}
 
 	// Agent CLI: the binary is argv[0] of agent.command (tool-agnostic — no
@@ -54,9 +68,9 @@ func Run(cfg config.Config, cfgErr error, look LookPath) []Check {
 
 	checks = append(checks,
 		lookCheck(look, "git", "git", true),
-		lookCheck(look, "jira-cli", "jira-cli", true),
-		lookCheck(look, "gitlab-cli", "gitlab-cli", true),
-		lookCheck(look, "kibana-cli", "kibana-cli", false),
+		capabilityCheck(look, probe, "jira-cli", true),
+		capabilityCheck(look, probe, "gitlab-cli", true),
+		capabilityCheck(look, probe, "kibana-cli", false),
 	)
 	return checks
 }
@@ -72,10 +86,37 @@ func lookCheck(look LookPath, name, bin string, required bool) Check {
 	if path, err := look(bin); err == nil {
 		return Check{name, OK, path}
 	}
-	if required {
-		return Check{name, Fail, "not found on PATH"}
+	return Check{name, failLevel(required), "not found on PATH"}
+}
+
+// capabilityCheck confirms a sibling CLI is usable: present on PATH AND reporting
+// authValid via its own `doctor --json`. Auth is the CLI's own concern; we only
+// verify it is ready so the spawned agent does not fail mid-fix.
+func capabilityCheck(look LookPath, probe Probe, bin string, required bool) Check {
+	if _, err := look(bin); err != nil {
+		return Check{bin, failLevel(required), "not found on PATH"}
 	}
-	return Check{name, Warn, "not found on PATH (optional)"}
+	out, perr := probe(bin, "doctor", "--json", "--quiet")
+	var h cliHealth
+	_ = json.Unmarshal(out, &h)
+	if h.AuthValid {
+		detail := "authenticated"
+		if h.Host != "" {
+			detail += ": " + h.Host
+		}
+		return Check{bin, OK, detail}
+	}
+	if perr != nil {
+		return Check{bin, failLevel(required), "not usable; run `" + bin + " doctor`"}
+	}
+	return Check{bin, failLevel(required), "not authenticated; run `" + bin + " auth login`"}
+}
+
+func failLevel(required bool) Level {
+	if required {
+		return Fail
+	}
+	return Warn
 }
 
 // HasFailure reports whether any check failed (drives the exit code).

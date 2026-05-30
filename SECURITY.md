@@ -28,7 +28,7 @@ You will receive an acknowledgement within **48 hours** and a resolution timelin
 
 ### Credential handling
 
-- Config credentials (`jira.token`, `gitlab.token`, etc.) are read from `~/.auto-bug-fix/config.json` at runtime and never logged or written elsewhere. Prefer `$ENV_VAR` references so secrets stay in the environment, not the file.
+- The config file holds no Jira/GitLab/Kibana credentials. Authentication is each sibling CLI's own responsibility (`jira-cli login`, `gitlab-cli auth login`, `kibana-cli auth login`); their tokens live in those tools' own stores, not in `~/.auto-bug-fix/config.json`. `auto-bug-fix doctor` verifies the CLIs are authenticated without ever reading their secrets.
 - `agent.command` is spawned without a shell, so the issue key is passed as a discrete argument — no shell interpolation or injection risk from Jira-supplied data.
 - The poller does not inject config credentials into the spawned agent. The agent relies on its own CLI authentication (`jira-cli login`, `gitlab-cli auth login`) or whatever the wrapper script sets up.
 
@@ -70,7 +70,7 @@ You will receive an acknowledgement within **48 hours** and a resolution timelin
 
 ### 凭证处理
 
-- 配置凭证（`jira.token`、`gitlab.token` 等）仅在运行时从 `~/.auto-bug-fix/config.json` 读取，不会写入其他文件或打印到日志。推荐用 `$ENV_VAR` 引用，让密钥留在环境变量而非文件中。
+- 配置文件不保存 Jira/GitLab/Kibana 凭证。认证是各兄弟 CLI 自己的事(`jira-cli login`、`gitlab-cli auth login`、`kibana-cli auth login`),token 存在那些工具自己的存储里,而非 `~/.auto-bug-fix/config.json`。`auto-bug-fix doctor` 在不读取任何密钥的前提下验证这些 CLI 是否已认证。
 - `agent.command` 以不经过 shell 的方式启动，issue key 作为独立参数传入——不会发生 shell 插值，也不会因 Jira 提供的 key 产生注入风险。
 - poller 不会向被 spawn 的 agent 注入配置凭证。agent 依赖自身的 CLI 认证（`jira-cli login`、`gitlab-cli auth login`），或 wrapper 脚本自行准备的凭证。
 

@@ -23,18 +23,5 @@
     "update": true,
     "handoff": true,
     "handoffDir": "handoff"
-  },
-  "jira": {
-    "host": "https://jira.example.com",
-    "token": "$JIRA_TOKEN"
-  },
-  "gitlab": {
-    "host": "https://gitlab.example.com",
-    "token": "$GITLAB_TOKEN"
-  },
-  "kibana": {
-    "host": "$KIBANA_HOST",
-    "user": "$KIBANA_USER",
-    "password": "$KIBANA_PASSWORD"
   }
 }

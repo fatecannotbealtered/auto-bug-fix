@@ -9,7 +9,13 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
-- **`doctor` command** — read-only preflight that checks config validity and the presence on PATH of the agent CLI (argv[0] of `agent.command`) plus `git`, `jira-cli`, `gitlab-cli` (required) and `kibana-cli` (optional). Exits non-zero if any required check fails. No network calls — each tool's own `doctor`/`login` still owns authentication.
+- **`doctor` command** — preflight that checks config validity, that the agent CLI (argv[0] of `agent.command`) and `git` are on PATH, and that the capability CLIs are actually **usable**: it delegates to each sibling CLI's own `doctor --json` to confirm `jira-cli`/`gitlab-cli` (required) and `kibana-cli` (optional) are authenticated and reachable. Supports `--json` for agent consumption and exits non-zero on any required failure.
+- **`--json` on lifecycle commands** — `doctor`, `status`, `stop`, and `start --detach` emit structured JSON (human-readable stays the default, matching `jira-cli`/`gitlab-cli`).
+- **Preflight gate** — `start` and `fix` run the doctor checks before spawning an agent and abort on any required failure, so an agent is never launched into a broken environment.
+
+### Changed
+
+- **Config no longer stores or requires Jira/GitLab/Kibana hosts or tokens.** Authentication is each sibling CLI's own responsibility (`jira-cli login`, `gitlab-cli auth login`, `kibana-cli auth login`); `auto-bug-fix doctor` verifies usability without reading secrets. `setup` no longer writes credential blocks, and `Validate` no longer requires them.
 
 ---
 

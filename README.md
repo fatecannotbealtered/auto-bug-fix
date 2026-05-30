@@ -169,11 +169,8 @@ Config lives at `~/.auto-bug-fix/config.json` (created by `auto-bug-fix setup`).
 | `knowledge.dir` | `.tcl` | Repo-local business-knowledge directory (repo-relative). |
 | `knowledge.read` / `update` / `handoff` | `true` | Whether the agent reads / updates knowledge and writes handoff files. |
 | `knowledge.handoffDir` | `handoff` | Handoff subdirectory under `knowledge.dir`. |
-| `jira.host` / `jira.token` | **required** | Jira DC base URL and Personal Access Token. |
-| `gitlab.host` / `gitlab.token` | **required** | GitLab base URL and PAT with `api` scope. |
-| `kibana.host` / `user` / `password` | optional | All three required together if any is set; otherwise log lookup (Step 4) is skipped. |
 
-Keep secrets in environment variables and reference them as `$VAR` (e.g. `"token": "$JIRA_TOKEN"`). Env vars are session-scoped — persist them via a startup script that sets them and then runs `auto-bug-fix start`.
+Jira/GitLab/Kibana hosts and tokens are **not** stored here. Authentication is each sibling CLI's own job — run `jira-cli login`, `gitlab-cli auth login` (and optionally `kibana-cli auth login`). `auto-bug-fix doctor` verifies they are authenticated and reachable.
 
 </details>
 

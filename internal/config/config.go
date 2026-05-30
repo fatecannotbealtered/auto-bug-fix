@@ -245,33 +245,16 @@ func Load(path string) (Config, error) {
 	return cfg, nil
 }
 
-// Validate checks required fields and constraints.
+// Validate checks required fields and constraints. It deliberately does NOT
+// require jira/gitlab/kibana hosts or tokens: authentication and connectivity
+// are each sibling CLI's own responsibility (jira-cli/gitlab-cli/kibana-cli),
+// verified at runtime by `auto-bug-fix doctor`, not stored in this config.
 func Validate(cfg Config) error {
-	if cfg.Jira.Host == "" {
-		return fmt.Errorf("jira.host is required")
-	}
-	if cfg.Jira.Token == "" {
-		return fmt.Errorf("jira.token is required")
-	}
-	if cfg.GitLab.Host == "" {
-		return fmt.Errorf("gitlab.host is required")
-	}
-	if cfg.GitLab.Token == "" {
-		return fmt.Errorf("gitlab.token is required")
-	}
 	if strings.TrimSpace(cfg.Agent.Command) == "" {
 		return fmt.Errorf("agent.command is required")
 	}
 	if cfg.Agent.AgentType != "" && cfg.Agent.AgentType != "kiro" && cfg.Agent.AgentType != "cursor" && cfg.Agent.AgentType != "claude-code" && cfg.Agent.AgentType != "codex" {
 		return fmt.Errorf("agent.agentType must be \"kiro\", \"cursor\", \"claude-code\", \"codex\", or empty")
-	}
-	if cfg.Kibana.Host != "" {
-		if cfg.Kibana.User == "" {
-			return fmt.Errorf("kibana.user is required when configuring kibana")
-		}
-		if cfg.Kibana.Password == "" {
-			return fmt.Errorf("kibana.password is required when configuring kibana")
-		}
 	}
 	if cfg.Poll.IntervalSeconds < 0 {
 		return fmt.Errorf("poll.intervalSeconds must be >= 0")

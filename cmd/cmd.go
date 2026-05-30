@@ -137,9 +137,9 @@ func runSetup(args []string) {
 
 	fmt.Printf("Config created at %s\n", *cfgPath)
 	if *agentType == "" {
-		fmt.Println("Next: fill in agent.command, jira.host, gitlab.host, and set environment variables for tokens.")
+		fmt.Println("Next: fill in agent.command and poll.filter, then authenticate jira-cli and gitlab-cli (`jira-cli login`, `gitlab-cli auth login`) and run `auto-bug-fix doctor`.")
 	} else {
-		fmt.Println("Next: fill in jira.host, gitlab.host, and set environment variables for tokens.")
+		fmt.Println("Next: set poll.filter, then authenticate jira-cli and gitlab-cli (`jira-cli login`, `gitlab-cli auth login`) and run `auto-bug-fix doctor`.")
 		fmt.Printf("Agent command pre-filled: %s\n", installer.AgentCommand(*agentType))
 	}
 }
@@ -208,9 +208,6 @@ func defaultConfig(agentType string) map[string]any {
 			"handoff":    true,
 			"handoffDir": config.DefaultKnowledgeHandoffDir,
 		},
-		"jira":   map[string]any{"host": "https://jira.example.com", "token": "$JIRA_TOKEN"},
-		"gitlab": map[string]any{"host": "https://gitlab.example.com", "token": "$GITLAB_TOKEN"},
-		"kibana": map[string]any{"host": "$KIBANA_HOST", "user": "$KIBANA_USER", "password": "$KIBANA_PASSWORD"},
 	}
 }
 
@@ -416,15 +413,22 @@ func hasFlag(args []string, flag string) bool {
 
 // ── doctor ────────────────────────────────────────────────────────────────────
 
+// cliProbe runs a sibling CLI and returns stdout even on non-zero exit so its
+// JSON can still be parsed (used by doctor to verify authValid).
+func cliProbe(bin string, args ...string) ([]byte, error) {
+	out, err := exec.Command(bin, args...).Output() //nolint:gosec
+	return out, err
+}
+
 // preflight loads + validates config and runs doctor checks. It aborts the
 // process when any required check fails, so we never spawn an agent into a
-// broken environment (missing CLI, invalid config). Returns the loaded config.
+// broken environment (missing/unusable CLI, invalid config). Returns the config.
 func preflight(cfgPath string) config.Config {
 	cfg, err := config.Load(cfgPath)
 	if err == nil {
 		err = config.Validate(cfg)
 	}
-	checks := doctor.Run(cfg, err, exec.LookPath)
+	checks := doctor.Run(cfg, err, exec.LookPath, cliProbe)
 	failed := doctor.HasFailure(checks)
 	// Surface every non-OK check: FAIL blocks, WARN is a reminder (e.g. an
 	// optional CLI missing) so a passing preflight is never silent about gaps.
@@ -459,7 +463,7 @@ func runDoctor(args []string) {
 		err = config.Validate(cfg)
 	}
 
-	checks := doctor.Run(cfg, err, exec.LookPath)
+	checks := doctor.Run(cfg, err, exec.LookPath, cliProbe)
 	ok := !doctor.HasFailure(checks)
 
 	// Agent-facing: --json emits a parseable result on stdout so the calling

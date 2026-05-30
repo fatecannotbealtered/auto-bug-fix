@@ -169,11 +169,8 @@ your-agent exec "Fix bug $1 using the auto-bug-fix skill"
 | `knowledge.dir` | `.tcl` | 仓库内业务知识目录（仓库相对路径）。 |
 | `knowledge.read` / `update` / `handoff` | `true` | agent 是否读取/更新知识、写 handoff 文件。 |
 | `knowledge.handoffDir` | `handoff` | `knowledge.dir` 下的 handoff 子目录。 |
-| `jira.host` / `jira.token` | **必填** | Jira DC 基础 URL 与个人访问令牌（PAT）。 |
-| `gitlab.host` / `gitlab.token` | **必填** | GitLab 基础 URL 与带 `api` 权限的 PAT。 |
-| `kibana.host` / `user` / `password` | 可选 | 任一存在则三者必填；否则跳过日志查询（Step 4）。 |
 
-密钥放环境变量、以 `$VAR` 引用（如 `"token": "$JIRA_TOKEN"`）。环境变量是会话级的——用一个先 set 环境变量再 `auto-bug-fix start` 的启动脚本来持久化。
+Jira/GitLab/Kibana 的 host 和 token **不**存在这里。认证是各兄弟 CLI 自己的事——执行 `jira-cli login`、`gitlab-cli auth login`(可选 `kibana-cli auth login`)。`auto-bug-fix doctor` 会验证它们是否已认证且可连通。
 
 </details>
 
