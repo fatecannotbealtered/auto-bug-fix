@@ -64,6 +64,20 @@ type cliHealth struct {
 func Run(cfg config.Config, cfgErr error, look LookPath, probe Probe, tmpl TemplateProbe) []Check {
 	checks := []Check{configCheck(cfgErr)}
 
+	// Config-independent checks always run — useful even when config is broken.
+	checks = append(checks,
+		lookCheck(look, "git", "git", true),
+		capabilityCheck(look, probe, "jira-cli", true),
+		capabilityCheck(look, probe, "gitlab-cli", true),
+		capabilityCheck(look, probe, "kibana-cli", false),
+	)
+
+	// Config-derived checks only make sense once config loaded and validated;
+	// running them on a zero/invalid config would emit misleading diagnostics.
+	if cfgErr != nil {
+		return checks
+	}
+
 	// Agent CLI: the binary is argv[0] of agent.command (tool-agnostic — no
 	// per-agent table, whatever vibe-coding tool you configured is checked).
 	if cfg.Agent.Command == "" {
@@ -78,14 +92,8 @@ func Run(cfg config.Config, cfgErr error, look LookPath, probe Probe, tmpl Templ
 	if c, ok := commandDriftCheck(cfg.Agent); ok {
 		checks = append(checks, c)
 	}
+	checks = append(checks, filterScopeCheck(cfg.Poll.Filter))
 
-	checks = append(checks,
-		lookCheck(look, "git", "git", true),
-		capabilityCheck(look, probe, "jira-cli", true),
-		capabilityCheck(look, probe, "gitlab-cli", true),
-		capabilityCheck(look, probe, "kibana-cli", false),
-		filterScopeCheck(cfg.Poll.Filter),
-	)
 	// Informational: surface where repos get cloned so the user is aware of the
 	// disk location (the default lives under home — C:\ on Windows). Never blocks.
 	if cfg.Workspace.Root != "" {
@@ -130,7 +138,7 @@ func capabilityCheck(look LookPath, probe Probe, bin string, required bool) Chec
 	}
 	out, perr := probe(bin, "doctor", "--json", "--quiet")
 	var h cliHealth
-	_ = json.Unmarshal(out, &h)
+	unmarshalErr := json.Unmarshal(out, &h)
 	if h.AuthValid {
 		detail := "authenticated"
 		if h.Host != "" {
@@ -138,7 +146,9 @@ func capabilityCheck(look LookPath, probe Probe, bin string, required bool) Chec
 		}
 		return Check{bin, OK, detail}
 	}
-	if perr != nil {
+	// A non-zero exit OR unparseable output both mean "can't confirm usable" —
+	// reporting "not authenticated" on garbage output would be a misdiagnosis.
+	if perr != nil || unmarshalErr != nil {
 		return Check{bin, failLevel(required), "not usable; run `" + bin + " doctor`"}
 	}
 	return Check{bin, failLevel(required), "not authenticated; run `" + bin + " auth login`"}

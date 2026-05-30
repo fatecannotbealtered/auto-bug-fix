@@ -79,7 +79,10 @@ func Execute() {
 }
 
 func printJSON(v any) {
-	b, _ := json.MarshalIndent(v, "", "  ")
+	b, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		log.Fatalf("marshal json: %v", err)
+	}
 	fmt.Println(string(b))
 }
 
@@ -381,11 +384,12 @@ func runFix(issueKey string, args []string) {
 // ── stop / status ─────────────────────────────────────────────────────────────
 
 func runStop(args []string) {
+	running, _, _ := daemon.Status(defaultPIDPath())
 	if err := daemon.Stop(defaultPIDPath()); err != nil {
 		log.Fatalf("stop: %v", err)
 	}
 	if hasFlag(args, "--json") {
-		printJSON(map[string]any{"stopped": true})
+		printJSON(map[string]any{"stopped": true, "wasRunning": running})
 		return
 	}
 	fmt.Println("auto-bug-fix poller stopped")
@@ -419,15 +423,21 @@ func hasFlag(args []string, flag string) bool {
 // ── doctor ────────────────────────────────────────────────────────────────────
 
 // cliProbe runs a sibling CLI and returns stdout even on non-zero exit so its
-// JSON can still be parsed (used by doctor to verify authValid).
+// JSON can still be parsed (used by doctor to verify authValid). A timeout keeps
+// a hung CLI from blocking preflight (and thus start/fix) indefinitely.
 func cliProbe(bin string, args ...string) ([]byte, error) {
-	out, err := exec.Command(bin, args...).Output() //nolint:gosec
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, bin, args...).Output() //nolint:gosec
 	return out, err
 }
 
 // templateProbe reports which subagent template files are missing for agentType.
 func templateProbe(agentType string) ([]string, bool) {
-	home, _ := os.UserHomeDir()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, false // cannot resolve home — treat as unverifiable
+	}
 	paths := installer.ArtifactPaths(agentType, home)
 	if len(paths) == 0 {
 		return nil, false // empty/unknown agentType — custom command, cannot verify
@@ -451,15 +461,26 @@ func resolveAgentCommand(cfg *config.Config) {
 	}
 }
 
-// preflight loads + validates config and runs doctor checks. It aborts the
-// process when any required check fails, so we never spawn an agent into a
-// broken environment (missing/unusable CLI, invalid config). Returns the config.
-func preflight(cfgPath string) config.Config {
+// loadConfig loads + validates config and, on success, resolves the agent
+// command. The load/validate error is returned so callers (doctor) can surface
+// CLI/PATH checks alongside a config failure; the command is only resolved when
+// config is valid (a zero-value config has nothing meaningful to resolve).
+func loadConfig(cfgPath string) (config.Config, error) {
 	cfg, err := config.Load(cfgPath)
 	if err == nil {
 		err = config.Validate(cfg)
 	}
-	resolveAgentCommand(&cfg)
+	if err == nil {
+		resolveAgentCommand(&cfg)
+	}
+	return cfg, err
+}
+
+// preflight loads + validates config and runs doctor checks. It aborts the
+// process when any required check fails, so we never spawn an agent into a
+// broken environment (missing/unusable CLI, invalid config). Returns the config.
+func preflight(cfgPath string) config.Config {
+	cfg, err := loadConfig(cfgPath)
 	checks := doctor.Run(cfg, err, exec.LookPath, cliProbe, templateProbe)
 	failed := doctor.HasFailure(checks)
 	// Surface every non-OK check: FAIL blocks, WARN is a reminder (e.g. an
@@ -490,11 +511,7 @@ func runDoctor(args []string) {
 		}
 	}
 
-	cfg, err := config.Load(cfgPath)
-	if err == nil {
-		err = config.Validate(cfg)
-	}
-	resolveAgentCommand(&cfg)
+	cfg, err := loadConfig(cfgPath)
 
 	checks := doctor.Run(cfg, err, exec.LookPath, cliProbe, templateProbe)
 	ok := !doctor.HasFailure(checks)

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/fatecannotbealtered/auto-bug-fix/internal/config"
 	"github.com/fatecannotbealtered/auto-bug-fix/internal/installer"
 )
 
@@ -51,6 +52,12 @@ func TestArtifactPaths_MatchInstallers(t *testing.T) {
 			paths := installer.ArtifactPaths(agentType, home)
 			if len(paths) == 0 {
 				t.Fatalf("ArtifactPaths(%q) returned none", agentType)
+			}
+			if !config.KnownAgentType(agentType) {
+				t.Errorf("config.KnownAgentType(%q) is false but installer supports it", agentType)
+			}
+			if installer.AgentCommand(agentType) == "" {
+				t.Errorf("AgentCommand(%q) is empty but installer supports it", agentType)
 			}
 			for _, p := range paths {
 				if _, err := os.Stat(p); err != nil {

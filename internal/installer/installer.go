@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/fatecannotbealtered/auto-bug-fix/agents"
 )
@@ -106,8 +107,8 @@ func InstallCodex(home string) error {
 	var final string
 	if len(existing) > 0 {
 		s := string(existing)
-		if start := indexOf(s, marker); start >= 0 {
-			end := indexOf(s, endMarker)
+		if start := strings.Index(s, marker); start >= 0 {
+			end := strings.Index(s, endMarker)
 			if end >= 0 {
 				final = s[:start] + section + s[end+len(endMarker)+1:]
 			} else {
@@ -139,13 +140,4 @@ func AgentCommand(agentType string) string {
 	default:
 		return ""
 	}
-}
-
-func indexOf(s, substr string) int {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return i
-		}
-	}
-	return -1
 }
