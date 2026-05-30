@@ -13,6 +13,7 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - **`--json` on lifecycle commands** — `doctor`, `status`, `stop`, and `start --detach` emit structured JSON (human-readable stays the default, matching `jira-cli`/`gitlab-cli`).
 - **Preflight gate** — `start` and `fix` run the doctor checks before spawning an agent and abort on any required failure, so an agent is never launched into a broken environment.
 - **Effective-location awareness** — `doctor` emits an `INFO` line echoing `workspace.root` (where repos are cloned, default under home / C:\ on Windows), so users and agents notice the disk location instead of silently accepting the default.
+- **Fix-scope check** — `doctor` reports the `poll.filter` blast radius so the agent can ask the user whether to limit it: no title filter **and** not assignee-limited matches every open Bug in the instance (`FAIL`, blocks); no title filter but assignee-limited is a `WARN`; a title filter is `OK`.
 
 ### Changed
 

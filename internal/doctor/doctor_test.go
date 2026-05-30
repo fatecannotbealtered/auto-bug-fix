@@ -53,7 +53,10 @@ func levelOf(checks []Check, name string) Level {
 }
 
 func cfgWith(command, agentType string) config.Config {
-	return config.Config{Agent: config.AgentConfig{Command: command, AgentType: agentType}}
+	return config.Config{
+		Agent: config.AgentConfig{Command: command, AgentType: agentType},
+		Poll:  config.PollConfig{Filter: config.FilterConfig{TitleContains: "bug"}},
+	}
 }
 
 const authOK = `{"authValid":true,"host":"https://jira.example.com"}`
@@ -130,6 +133,33 @@ func TestRun_TemplateUnverifiableWarnsOnly(t *testing.T) {
 	}
 	if got := levelOf(checks, "agent template"); got != Warn {
 		t.Errorf("unverifiable template should Warn, got %v", got)
+	}
+}
+func TestRun_FilterUnscopedFails(t *testing.T) {
+	cfg := config.Config{
+		Agent: config.AgentConfig{Command: "kiro-cli", AgentType: "kiro"},
+		Poll:  config.PollConfig{Filter: config.FilterConfig{TitleContains: "", AssignedToMe: false}},
+	}
+	checks := Run(cfg, nil, lookFake(allPresent()), probeFake(allAuthed()), tmplInstalled)
+	if !HasFailure(checks) {
+		t.Fatal("unscoped filter (no title, not assignee-limited) must fail")
+	}
+	if got := levelOf(checks, "fix scope"); got != Fail {
+		t.Errorf("fix scope should Fail, got %v", got)
+	}
+}
+
+func TestRun_FilterBroadWarnsOnly(t *testing.T) {
+	cfg := config.Config{
+		Agent: config.AgentConfig{Command: "kiro-cli", AgentType: "kiro"},
+		Poll:  config.PollConfig{Filter: config.FilterConfig{TitleContains: "", AssignedToMe: true}},
+	}
+	checks := Run(cfg, nil, lookFake(allPresent()), probeFake(allAuthed()), tmplInstalled)
+	if HasFailure(checks) {
+		t.Fatalf("assignee-limited filter must not fail, got %+v", checks)
+	}
+	if got := levelOf(checks, "fix scope"); got != Warn {
+		t.Errorf("broad filter should Warn, got %v", got)
 	}
 }
 

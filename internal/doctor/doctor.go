@@ -80,6 +80,7 @@ func Run(cfg config.Config, cfgErr error, look LookPath, probe Probe, tmpl Templ
 		capabilityCheck(look, probe, "jira-cli", true),
 		capabilityCheck(look, probe, "gitlab-cli", true),
 		capabilityCheck(look, probe, "kibana-cli", false),
+		filterScopeCheck(cfg.Poll.Filter),
 	)
 	// Informational: surface where repos get cloned so the user is aware of the
 	// disk location (the default lives under home — C:\ on Windows). Never blocks.
@@ -144,6 +145,19 @@ func failLevel(required bool) Level {
 		return Fail
 	}
 	return Warn
+}
+
+// filterScopeCheck reports how wide the poller's matching scope is, so the agent
+// can ask the user whether to limit it. No title AND not assignee-limited matches
+// every open Bug in the instance and blocks.
+func filterScopeCheck(f config.FilterConfig) Check {
+	if f.TitleContains == "" && !f.AssignedToMe {
+		return Check{"fix scope", Fail, "matches EVERY open Bug in the Jira instance — set poll.filter.titleContains or assignedToMe to limit scope"}
+	}
+	if f.TitleContains == "" {
+		return Check{"fix scope", Warn, "no title filter: every open Bug assigned to you will be auto-fixed — ask the user whether to limit the scope (poll.filter.titleContains)"}
+	}
+	return Check{"fix scope", OK, "limited by title containing \"" + f.TitleContains + "\""}
 }
 
 // HasFailure reports whether any check failed (drives the exit code).
