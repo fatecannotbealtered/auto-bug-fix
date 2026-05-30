@@ -128,22 +128,20 @@ Each step states its intent first; the commands are minimal verified examples �
 jira-cli issue get <TICKET_KEY> --json
 ```
 
-Read the **whole ticket, including `description`** (not just the summary): it carries reproduction steps, environment/locale, the affected **service/repo**, and often an explicit **development branch** to base the fix on. (If your jira-cli omits `description` from flat output, use `jira-cli issue get <TICKET_KEY> --raw --json` and read `.fields.description`.) Extract `serviceName` (GitLab repo), `baseBranch` (the **development branch named in the ticket**, e.g. `开发分支：feat-tcl-home`; fall back to the repo `default_branch` only if none is named), `errorKeywords`, and `environment`. If the ticket does not name a repo, find it:
-
-```bash
-gitlab-cli search projects --query "<keyword-from-description>" --json
-```
+Read the **whole ticket, including `description`** (not just the summary; use `jira-cli issue get <TICKET_KEY> --raw --json` and read `.fields.description` if your jira-cli omits it from flat output). From the free-form description determine the two things a fix cannot proceed without — **no fixed label format**: `serviceName` (the **entry service/repo**) and `baseBranch` (the **development branch to base the fix on and target the MR at**). Also note `errorKeywords` and `environment`. **If the ticket does not make both `serviceName` and `baseBranch` clear, do not guess** — stop, comment on Jira naming what is missing, and return `needs-info`. Never search for or assume the entry repo or branch when the ticket is silent.
 
 ### Step 2 — Prepare the workspace and read the source code
 
-1. Resolve the repo: `gitlab-cli project get <serviceName> --json`. Read the clone URL (`ssh_url_to_repo` / `http_url_to_repo`) and `default_branch` — **do not assume the default branch is `main`.** The **base branch** is the ticket's development branch (`baseBranch`) if present, else `default_branch`.
-2. **Reuse the per-repo checkout at `$AUTO_BUG_FIX_WORKSPACE_ROOT/<serviceName>` — never clone redundantly** (one per repo, reused across tickets, **no per-ticket subdirectory**, keeping warm build caches). **Clean** (`git status --porcelain` empty) → record the current branch, `git fetch`, check out `<baseBranch>` and fast-forward. **Dirty** → **never stash/discard** the user's changes; stop with `needs-info`/`auto-diagnose` (or clone a throwaway elsewhere). **Absent** → clone it there. One fix per repo at a time. Then create the work branch off the base branch: `git checkout -b fix/<TICKET_KEY>-<short-desc>`.
+1. Resolve the repo: `gitlab-cli project get <serviceName> --json`. Read the clone URL and `default_branch` — **do not assume `main`.** The **base branch is the ticket's development branch** (`baseBranch`).
+2. **Reuse the per-repo checkout at `$AUTO_BUG_FIX_WORKSPACE_ROOT/<serviceName>` — never clone redundantly** (one per repo, no per-ticket subdirectory, keeping warm build caches). **Clean** (`git status --porcelain` empty) → record the current branch, `git fetch`. **Dirty** → **never stash/discard** the user's changes; stop with `needs-info`/`auto-diagnose` (or throwaway clone). **Absent** → clone it there. One fix per repo at a time. **Verify `<baseBranch>` exists on the remote** (`git ls-remote --heads origin <baseBranch>`); **if not, do not substitute — stop and return `needs-info`.** Otherwise check it out, fast-forward, and create the work branch: `git checkout -b fix/<TICKET_KEY>-<short-desc>`.
 3. Read the class/method in the stack trace, the surrounding logic, and the existing test files.
 4. If `AUTO_BUG_FIX_KNOWLEDGE_READ=true`, read durable knowledge under `$AUTO_BUG_FIX_KNOWLEDGE_DIR` (default `.tcl`), excluding the handoff subdirectory. Ignore the directory if it is absent.
 
 ### Step 3 — Root cause analysis (code first)
 
 Determine the root cause from code alone. Clear → skip to Step 5. Inconclusive → Step 4.
+
+**Downstream services:** the ticket names the *entry* service, but the defect may live in a **downstream service** it calls (named in a stack trace, API call, or config). That is evidence-driven discovery, not guessing a silent ticket — resolve the downstream repo via `gitlab-cli` and prepare it as in Step 2. **If it cannot be confidently resolved, stop and return `needs-info`.** A change spanning services is **cross-service** — prefer `auto-diagnose` over an autonomous cross-service fix.
 
 ### Step 4 — Query Kibana (only if Step 3 is inconclusive and kibana-cli is configured)
 
