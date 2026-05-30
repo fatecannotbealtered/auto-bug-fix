@@ -65,7 +65,7 @@ AUTO_BUG_FIX_RESULT outcome=needs-info
 
    Foreground `auto-bug-fix start` is still available for debugging (Ctrl+C to stop).
 
-6. **Verify before finishing:** run `auto-bug-fix doctor --json` and parse it. It returns `{"ok": bool, "checks": [{"level": "OK|WARN|FAIL", "name", "detail"}]}` on stdout (config-loading warnings go to stderr). Act on it programmatically: any `FAIL` blocks the first fix — typically a missing CLI to install or an unset token env var; a `WARN` (e.g. optional `kibana-cli` absent) is safe to proceed past. `doctor` does not check authentication, so also confirm `jira-cli` and `gitlab-cli` are logged in (see Prerequisites below) and guide the human through their login commands if not.
+6. **Verify before finishing:** run `auto-bug-fix doctor --json` and parse it. It returns `{"ok": bool, "checks": [{"level": "OK|WARN|FAIL", "name", "detail"}]}` on stdout. The checks cover config validity, the agent CLI on PATH, the **subagent template installed for your `agentType`** (a `FAIL` here means Step 1's `setup --agent` was skipped — re-run it), and each capability CLI being **authenticated and reachable** (it calls `jira-cli`/`gitlab-cli`/`kibana-cli`'s own `doctor`). Act programmatically: any `FAIL` blocks the first fix; a `WARN` (e.g. optional `kibana-cli` not configured, or a custom `agent.command` whose template can't be verified) is safe to proceed past.
 
 ## Prerequisites
 

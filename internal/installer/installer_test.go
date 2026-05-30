@@ -32,6 +32,38 @@ func TestInstallKiro_CreatesFiles(t *testing.T) {
 	}
 }
 
+// ArtifactPaths must list exactly the files each installer writes, so doctor's
+// "is the subagent template installed" check cannot drift from installation.
+func TestArtifactPaths_MatchInstallers(t *testing.T) {
+	useTempWorkingDir(t)
+	cases := map[string]func(string) error{
+		"kiro":        installer.InstallKiro,
+		"cursor":      installer.InstallCursor,
+		"claude-code": installer.InstallClaudeCode,
+		"codex":       installer.InstallCodex,
+	}
+	for agentType, install := range cases {
+		t.Run(agentType, func(t *testing.T) {
+			home := t.TempDir()
+			if err := install(home); err != nil {
+				t.Fatal(err)
+			}
+			paths := installer.ArtifactPaths(agentType, home)
+			if len(paths) == 0 {
+				t.Fatalf("ArtifactPaths(%q) returned none", agentType)
+			}
+			for _, p := range paths {
+				if _, err := os.Stat(p); err != nil {
+					t.Errorf("ArtifactPaths lists %s but installer did not create it", p)
+				}
+			}
+		})
+	}
+	if got := installer.ArtifactPaths("", "/home"); got != nil {
+		t.Errorf("empty agentType should yield nil paths, got %v", got)
+	}
+}
+
 func TestInstallCursor_CreatesMDC(t *testing.T) {
 	useTempWorkingDir(t)
 	home := t.TempDir()

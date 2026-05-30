@@ -45,6 +45,10 @@ type LookPath func(string) (string, error)
 // should return stdout even on a non-zero exit so JSON output can be parsed.
 type Probe func(bin string, args ...string) ([]byte, error)
 
+// TemplateProbe reports which subagent template files are missing for agentType,
+// and whether agentType is one we can verify (false for empty/custom commands).
+type TemplateProbe func(agentType string) (missing []string, verifiable bool)
+
 // cliHealth is the JSON shape shared by the sibling CLIs' `doctor --json`.
 type cliHealth struct {
 	AuthValid bool   `json:"authValid"`
@@ -53,7 +57,7 @@ type cliHealth struct {
 
 // Run returns the preflight checks for cfg. cfgErr is the error from loading and
 // validating config (nil when it loaded and validated cleanly).
-func Run(cfg config.Config, cfgErr error, look LookPath, probe Probe) []Check {
+func Run(cfg config.Config, cfgErr error, look LookPath, probe Probe, tmpl TemplateProbe) []Check {
 	checks := []Check{configCheck(cfgErr)}
 
 	// Agent CLI: the binary is argv[0] of agent.command (tool-agnostic — no
@@ -66,6 +70,8 @@ func Run(cfg config.Config, cfgErr error, look LookPath, probe Probe) []Check {
 		checks = append(checks, lookCheck(look, "agent CLI ("+tokens[0]+")", tokens[0], true))
 	}
 
+	checks = append(checks, agentTemplateCheck(tmpl, cfg.Agent.AgentType))
+
 	checks = append(checks,
 		lookCheck(look, "git", "git", true),
 		capabilityCheck(look, probe, "jira-cli", true),
@@ -73,6 +79,19 @@ func Run(cfg config.Config, cfgErr error, look LookPath, probe Probe) []Check {
 		capabilityCheck(look, probe, "kibana-cli", false),
 	)
 	return checks
+}
+
+// agentTemplateCheck verifies the subagent workflow template is installed for the
+// configured agentType. Without it the spawned agent runs but has no workflow.
+func agentTemplateCheck(tmpl TemplateProbe, agentType string) Check {
+	missing, verifiable := tmpl(agentType)
+	if !verifiable {
+		return Check{"agent template", Warn, "custom agent.command (agentType unset); cannot verify the subagent template is installed"}
+	}
+	if len(missing) > 0 {
+		return Check{"agent template", Fail, "not installed; run `auto-bug-fix setup --agent " + agentType + "`"}
+	}
+	return Check{"agent template", OK, "installed for " + agentType}
 }
 
 func configCheck(cfgErr error) Check {

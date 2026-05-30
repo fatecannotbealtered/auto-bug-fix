@@ -12,6 +12,28 @@ func readAgentFile(agentType, filename string) (string, error) {
 	return agents.ReadFile(agentType, filename)
 }
 
+// ArtifactPaths returns the files that `setup --agent <agentType>` installs into
+// the user's home. It is the single source of truth for both installation and
+// doctor's "is the subagent template installed" verification. Returns nil for an
+// empty or unknown agentType (a custom agent.command we cannot verify).
+func ArtifactPaths(agentType, home string) []string {
+	switch agentType {
+	case "kiro":
+		return []string{
+			filepath.Join(home, ".kiro", "skills", "auto-bug-fix", "SKILL.md"),
+			filepath.Join(home, ".kiro", "agents", "auto-bug-fix.json"),
+		}
+	case "cursor":
+		return []string{filepath.Join(home, ".cursor", "rules", "auto-bug-fix.mdc")}
+	case "claude-code":
+		return []string{filepath.Join(home, ".claude", "agents", "auto-bug-fix.md")}
+	case "codex":
+		return []string{filepath.Join(home, ".codex", "AGENTS.md")}
+	default:
+		return nil
+	}
+}
+
 // InstallKiro writes the kiro agent config and execution SKILL.md to ~/.kiro/.
 func InstallKiro(home string) error {
 	agentJSON, err := readAgentFile("kiro", "auto-bug-fix.json")

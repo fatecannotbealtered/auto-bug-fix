@@ -27,6 +27,22 @@ func probeFake(out map[string]string) Probe {
 	}
 }
 
+// tmplInstalled treats a known agentType as fully installed.
+func tmplInstalled(agentType string) ([]string, bool) {
+	if agentType == "" {
+		return nil, false
+	}
+	return nil, true
+}
+
+// tmplMissing treats a known agentType as present-but-template-missing.
+func tmplMissing(agentType string) ([]string, bool) {
+	if agentType == "" {
+		return nil, false
+	}
+	return []string{"/home/.kiro/skills/auto-bug-fix/SKILL.md"}, true
+}
+
 func levelOf(checks []Check, name string) Level {
 	for _, c := range checks {
 		if c.Name == name {
@@ -36,8 +52,8 @@ func levelOf(checks []Check, name string) Level {
 	return -1
 }
 
-func cfgWith(command string) config.Config {
-	return config.Config{Agent: config.AgentConfig{Command: command}}
+func cfgWith(command, agentType string) config.Config {
+	return config.Config{Agent: config.AgentConfig{Command: command, AgentType: agentType}}
 }
 
 const authOK = `{"authValid":true,"host":"https://jira.example.com"}`
@@ -46,21 +62,26 @@ func allPresent() map[string]bool {
 	return map[string]bool{"kiro-cli": true, "git": true, "jira-cli": true, "gitlab-cli": true, "kibana-cli": true}
 }
 
+func allAuthed() map[string]string {
+	return map[string]string{"jira-cli": authOK, "gitlab-cli": authOK, "kibana-cli": authOK}
+}
+
 func TestRun_AllUsable(t *testing.T) {
-	probe := probeFake(map[string]string{"jira-cli": authOK, "gitlab-cli": authOK, "kibana-cli": authOK})
-	checks := Run(cfgWith("kiro-cli chat \"fix {issueKey}\""), nil, lookFake(allPresent()), probe)
+	checks := Run(cfgWith("kiro-cli chat \"fix {issueKey}\"", "kiro"), nil, lookFake(allPresent()), probeFake(allAuthed()), tmplInstalled)
 	if HasFailure(checks) {
 		t.Fatalf("expected no failure, got %+v", checks)
 	}
 	if got := levelOf(checks, "jira-cli"); got != OK {
 		t.Errorf("jira-cli should be OK, got %v", got)
 	}
+	if got := levelOf(checks, "agent template"); got != OK {
+		t.Errorf("agent template should be OK, got %v", got)
+	}
 }
 
 func TestRun_RequiredCliMissingFails(t *testing.T) {
 	look := lookFake(map[string]bool{"kiro-cli": true, "git": true, "gitlab-cli": true, "kibana-cli": true}) // jira-cli absent
-	probe := probeFake(map[string]string{"gitlab-cli": authOK, "kibana-cli": authOK})
-	checks := Run(cfgWith("kiro-cli"), nil, look, probe)
+	checks := Run(cfgWith("kiro-cli", "kiro"), nil, look, probeFake(allAuthed()), tmplInstalled)
 	if !HasFailure(checks) {
 		t.Fatal("expected failure when a required CLI is missing")
 	}
@@ -70,9 +91,8 @@ func TestRun_RequiredCliMissingFails(t *testing.T) {
 }
 
 func TestRun_RequiredCliUnauthenticatedFails(t *testing.T) {
-	// present on PATH but doctor reports not usable (no authValid)
 	probe := probeFake(map[string]string{"gitlab-cli": authOK, "kibana-cli": authOK}) // jira-cli -> exit 1
-	checks := Run(cfgWith("kiro-cli"), nil, lookFake(allPresent()), probe)
+	checks := Run(cfgWith("kiro-cli", "kiro"), nil, lookFake(allPresent()), probe, tmplInstalled)
 	if !HasFailure(checks) {
 		t.Fatal("expected failure when a required CLI is not authenticated")
 	}
@@ -83,7 +103,7 @@ func TestRun_RequiredCliUnauthenticatedFails(t *testing.T) {
 
 func TestRun_OptionalKibanaUnusableWarnsOnly(t *testing.T) {
 	probe := probeFake(map[string]string{"jira-cli": authOK, "gitlab-cli": authOK}) // kibana-cli -> exit 1
-	checks := Run(cfgWith("kiro-cli"), nil, lookFake(allPresent()), probe)
+	checks := Run(cfgWith("kiro-cli", "kiro"), nil, lookFake(allPresent()), probe, tmplInstalled)
 	if HasFailure(checks) {
 		t.Fatalf("optional kibana-cli unusable must not fail, got %+v", checks)
 	}
@@ -92,9 +112,29 @@ func TestRun_OptionalKibanaUnusableWarnsOnly(t *testing.T) {
 	}
 }
 
+func TestRun_TemplateMissingFails(t *testing.T) {
+	checks := Run(cfgWith("kiro-cli", "kiro"), nil, lookFake(allPresent()), probeFake(allAuthed()), tmplMissing)
+	if !HasFailure(checks) {
+		t.Fatal("expected failure when the subagent template is not installed")
+	}
+	if got := levelOf(checks, "agent template"); got != Fail {
+		t.Errorf("missing template should Fail, got %v", got)
+	}
+}
+
+func TestRun_TemplateUnverifiableWarnsOnly(t *testing.T) {
+	// empty agentType (custom command) — cannot verify, must not fail
+	checks := Run(cfgWith("kiro-cli run {issueKey}", ""), nil, lookFake(allPresent()), probeFake(allAuthed()), tmplInstalled)
+	if HasFailure(checks) {
+		t.Fatalf("unverifiable template must not fail, got %+v", checks)
+	}
+	if got := levelOf(checks, "agent template"); got != Warn {
+		t.Errorf("unverifiable template should Warn, got %v", got)
+	}
+}
+
 func TestRun_ConfigErrorFails(t *testing.T) {
-	probe := probeFake(map[string]string{"jira-cli": authOK, "gitlab-cli": authOK, "kibana-cli": authOK})
-	checks := Run(cfgWith("kiro-cli"), errors.New("agent.command is required"), lookFake(allPresent()), probe)
+	checks := Run(cfgWith("kiro-cli", "kiro"), errors.New("agent.command is required"), lookFake(allPresent()), probeFake(allAuthed()), tmplInstalled)
 	if !HasFailure(checks) {
 		t.Fatal("expected failure on config error")
 	}
@@ -104,8 +144,7 @@ func TestRun_ConfigErrorFails(t *testing.T) {
 }
 
 func TestRun_EmptyCommandFails(t *testing.T) {
-	probe := probeFake(map[string]string{"jira-cli": authOK, "gitlab-cli": authOK, "kibana-cli": authOK})
-	checks := Run(cfgWith(""), nil, lookFake(allPresent()), probe)
+	checks := Run(cfgWith("", "kiro"), nil, lookFake(allPresent()), probeFake(allAuthed()), tmplInstalled)
 	if !HasFailure(checks) {
 		t.Fatal("expected failure when agent.command is empty")
 	}

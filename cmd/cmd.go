@@ -420,6 +420,22 @@ func cliProbe(bin string, args ...string) ([]byte, error) {
 	return out, err
 }
 
+// templateProbe reports which subagent template files are missing for agentType.
+func templateProbe(agentType string) ([]string, bool) {
+	home, _ := os.UserHomeDir()
+	paths := installer.ArtifactPaths(agentType, home)
+	if len(paths) == 0 {
+		return nil, false // empty/unknown agentType — custom command, cannot verify
+	}
+	var missing []string
+	for _, p := range paths {
+		if _, err := os.Stat(p); err != nil {
+			missing = append(missing, p)
+		}
+	}
+	return missing, true
+}
+
 // preflight loads + validates config and runs doctor checks. It aborts the
 // process when any required check fails, so we never spawn an agent into a
 // broken environment (missing/unusable CLI, invalid config). Returns the config.
@@ -428,7 +444,7 @@ func preflight(cfgPath string) config.Config {
 	if err == nil {
 		err = config.Validate(cfg)
 	}
-	checks := doctor.Run(cfg, err, exec.LookPath, cliProbe)
+	checks := doctor.Run(cfg, err, exec.LookPath, cliProbe, templateProbe)
 	failed := doctor.HasFailure(checks)
 	// Surface every non-OK check: FAIL blocks, WARN is a reminder (e.g. an
 	// optional CLI missing) so a passing preflight is never silent about gaps.
@@ -463,7 +479,7 @@ func runDoctor(args []string) {
 		err = config.Validate(cfg)
 	}
 
-	checks := doctor.Run(cfg, err, exec.LookPath, cliProbe)
+	checks := doctor.Run(cfg, err, exec.LookPath, cliProbe, templateProbe)
 	ok := !doctor.HasFailure(checks)
 
 	// Agent-facing: --json emits a parseable result on stdout so the calling
