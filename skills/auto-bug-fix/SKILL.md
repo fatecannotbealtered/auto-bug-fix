@@ -150,19 +150,30 @@ You drive `jira-cli`, `gitlab-cli`, and optionally `kibana-cli`. They are agent-
 jira-cli issue get <TICKET_KEY> --json
 ```
 
-Extract: `serviceName` (GitLab repo name), `errorKeywords` (exception/log fragments), `environment`.
+Read the **whole ticket, including `description`** — not just the summary. The description carries the load-bearing detail: reproduction steps, environment/locale, the affected **service/repo**, and often an explicit **development branch** to base the fix on. (If your jira-cli build omits `description` from flat output, fall back to `jira-cli issue get <TICKET_KEY> --raw --json` and read `.fields.description`.)
+
+Extract:
+- `serviceName` — the GitLab repo (frequently named in the description, e.g. a `服务/开发分支` block).
+- `baseBranch` — the **development branch named in the ticket** (e.g. `开发分支：feat-tcl-home`). This is the branch to base the fix on and to target the MR at; only fall back to the repo `default_branch` if the ticket names none.
+- `errorKeywords`, `environment`/locale, and the reproduction steps.
 
 If `serviceName` is missing, search GitLab and pick the closest match:
 ```bash
 gitlab-cli search projects --query "<keyword-from-description>" --json
 ```
 
-### Step 2 — Prepare local workspace and read the source code
+### Step 2 — Prepare the working copy and branch
 
-1. Resolve the repo: `gitlab-cli project get <serviceName> --json`. From the result read the clone URL (`ssh_url_to_repo` / `http_url_to_repo`) **and `default_branch` — do not assume the default branch is `main`.**
-2. Clone into (or reuse) `$AUTO_BUG_FIX_WORKSPACE_ROOT/<TICKET_KEY>/<serviceName>`, fetch the latest default branch, then create a work branch `fix/<TICKET_KEY>-<short-desc>` off it.
-3. Read the class/method in the stack trace, the surrounding logic, and the existing test files.
-4. If `AUTO_BUG_FIX_KNOWLEDGE_READ=true`, read durable knowledge under `$AUTO_BUG_FIX_KNOWLEDGE_DIR` (default `.tcl`), excluding the handoff subdirectory. Ignore the directory if it is absent.
+1. Resolve the repo: `gitlab-cli project get <serviceName> --json`. Read the clone URL (`ssh_url_to_repo` / `http_url_to_repo`) and `default_branch` — **do not assume the default branch is `main`.**
+2. **Choose the base branch:** the development branch from the ticket (Step 1 `baseBranch`) when present, otherwise `default_branch`.
+3. **Reuse an existing checkout — never clone redundantly.** The working copy lives at `$AUTO_BUG_FIX_WORKSPACE_ROOT/<serviceName>` — **one per repo, reused across tickets, with no per-ticket subdirectory** — so warm build caches and dependencies are not thrown away on every run.
+   - **Exists and clean** (`git status --porcelain` is empty): record the current branch (to restore later), `git fetch`, then check out `<baseBranch>` and fast-forward it.
+   - **Exists but dirty** (uncommitted changes): **never stash or discard them.** Stop and return `needs-info`/`auto-diagnose` stating the working copy has uncommitted local changes you will not touch (or, if you must proceed, clone a throwaway copy elsewhere) — do not modify the user's work.
+   - **Absent:** clone it there, then check out `<baseBranch>`.
+   - **One fix per repo at a time:** a second concurrent fix targeting the same repo must wait (the shared checkout is not safe for parallel use).
+4. Create the work branch off the base branch: `git checkout -b fix/<TICKET_KEY>-<short-desc>`.
+5. Read the class/method in the stack trace, the surrounding logic, and the existing test files.
+6. If `AUTO_BUG_FIX_KNOWLEDGE_READ=true`, read durable knowledge under `$AUTO_BUG_FIX_KNOWLEDGE_DIR` (default `.tcl`), excluding the handoff subdirectory. Ignore the directory if it is absent.
 
 ### Step 3 — Root cause analysis (code-only)
 
@@ -215,12 +226,12 @@ git push -u origin fix/<TICKET_KEY>-<short-desc>
 
 gitlab-cli mr create --project <serviceName> \
   --source-branch fix/<TICKET_KEY>-<short-desc> \
-  --target-branch <default_branch> \
+  --target-branch <baseBranch> \
   --title "fix: <short description> (<TICKET_KEY>)" \
   --json --compact
 ```
 
-Open the MR against the repo's `default_branch` (from Step 2), not a hard-coded `main`. Include root cause, what changed, and the verifying test in the MR description (confirm the description flag via `gitlab-cli reference`). Record the MR `webUrl`.
+Target the MR at the **base branch from Step 2** (the ticket's development branch, or `default_branch` when the ticket names none) — never a hard-coded `main`. Include root cause, what changed, and the verifying test in the MR description (confirm the description flag via `gitlab-cli reference`). Record the MR `webUrl`.
 
 ### Step 8 — Update Jira
 
@@ -233,7 +244,7 @@ jira-cli issue comment add <TICKET_KEY> \
 
 Done. MR is ready for human review and merge.
 
-Honor `AUTO_BUG_FIX_WORKSPACE_CLEANUP`: `keep` leaves the local workspace for debugging; `on-success` removes `$AUTO_BUG_FIX_WORKSPACE_ROOT/<TICKET_KEY>` after the MR is created; `always` may remove it before exit.
+**Leave the working copy as you found it:** check out the original branch you recorded in Step 2 (`git checkout <original-branch>`); the fix branch is already pushed, so nothing is lost. Since the checkout is reused (and may be the user's own), `AUTO_BUG_FIX_WORKSPACE_CLEANUP` applies to throwaway clones only: `keep` leaves everything; `on-success`/`always` may remove a **throwaway** clone created for a dirty/absent repo, but must **never delete a reused per-repo checkout** — restoring its branch is the cleanup.
 
 ## Guardrails
 
