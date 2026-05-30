@@ -13,9 +13,6 @@ import (
 
 type Config struct {
 	Agent     AgentConfig     `json:"agent"`
-	Jira      JiraConfig      `json:"jira"`
-	GitLab    GitLabConfig    `json:"gitlab"`
-	Kibana    KibanaConfig    `json:"kibana"`
 	Poll      PollConfig      `json:"poll"`
 	Workspace WorkspaceConfig `json:"workspace"`
 	Knowledge KnowledgeConfig `json:"knowledge"`
@@ -24,22 +21,6 @@ type Config struct {
 type AgentConfig struct {
 	Command   string `json:"command"`
 	AgentType string `json:"agentType"` // "kiro" | "cursor" | "" (custom)
-}
-
-type JiraConfig struct {
-	Host  string `json:"host"`
-	Token string `json:"token"`
-}
-
-type GitLabConfig struct {
-	Host  string `json:"host"`
-	Token string `json:"token"`
-}
-
-type KibanaConfig struct {
-	Host     string `json:"host"`
-	User     string `json:"user"`
-	Password string `json:"password"`
 }
 
 type PollConfig struct {
@@ -165,13 +146,6 @@ func substituteEnv(s string, missing map[string]struct{}) string {
 func substituteEnvInConfig(cfg *Config) []string {
 	missing := map[string]struct{}{}
 	cfg.Agent.Command = substituteEnv(cfg.Agent.Command, missing)
-	cfg.Jira.Host = substituteEnv(cfg.Jira.Host, missing)
-	cfg.Jira.Token = substituteEnv(cfg.Jira.Token, missing)
-	cfg.GitLab.Host = substituteEnv(cfg.GitLab.Host, missing)
-	cfg.GitLab.Token = substituteEnv(cfg.GitLab.Token, missing)
-	cfg.Kibana.Host = substituteEnv(cfg.Kibana.Host, missing)
-	cfg.Kibana.User = substituteEnv(cfg.Kibana.User, missing)
-	cfg.Kibana.Password = substituteEnv(cfg.Kibana.Password, missing)
 	cfg.Poll.Filter.TitleContains = substituteEnv(cfg.Poll.Filter.TitleContains, missing)
 	cfg.Workspace.Root = substituteEnv(cfg.Workspace.Root, missing)
 	cfg.Workspace.Cleanup = substituteEnv(cfg.Workspace.Cleanup, missing)

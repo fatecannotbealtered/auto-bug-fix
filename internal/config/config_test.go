@@ -27,13 +27,13 @@ func writeConfig(t *testing.T, v any) string {
 
 func TestLoad_SubstitutesEnvVars(t *testing.T) {
 	t.Setenv("TEST_TOKEN", "secret123")
-	path := writeConfig(t, map[string]any{"jira": map[string]any{"token": "$TEST_TOKEN"}})
+	path := writeConfig(t, map[string]any{"poll": map[string]any{"filter": map[string]any{"titleContains": "$TEST_TOKEN"}}})
 	cfg, err := config.Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Jira.Token != "secret123" {
-		t.Fatalf("got %q, want %q", cfg.Jira.Token, "secret123")
+	if cfg.Poll.Filter.TitleContains != "secret123" {
+		t.Fatalf("got %q, want %q", cfg.Poll.Filter.TitleContains, "secret123")
 	}
 }
 
@@ -47,13 +47,13 @@ func TestLoad_WarnsOnUnresolvedEnvPlaceholder(t *testing.T) {
 	log.SetOutput(&buf)
 	t.Cleanup(func() { log.SetOutput(os.Stderr) })
 
-	path := writeConfig(t, map[string]any{"jira": map[string]any{"token": "$" + unsetVar}})
+	path := writeConfig(t, map[string]any{"poll": map[string]any{"filter": map[string]any{"titleContains": "$" + unsetVar}}})
 	cfg, err := config.Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Jira.Token != "" {
-		t.Fatalf("unset placeholder should resolve to empty, got %q", cfg.Jira.Token)
+	if cfg.Poll.Filter.TitleContains != "" {
+		t.Fatalf("unset placeholder should resolve to empty, got %q", cfg.Poll.Filter.TitleContains)
 	}
 	if out := buf.String(); !strings.Contains(out, unsetVar) {
 		t.Fatalf("expected warning naming %q, got %q", unsetVar, out)
@@ -67,7 +67,7 @@ func TestLoad_NoWarnWhenEnvResolved(t *testing.T) {
 	log.SetOutput(&buf)
 	t.Cleanup(func() { log.SetOutput(os.Stderr) })
 
-	path := writeConfig(t, map[string]any{"jira": map[string]any{"token": "$TEST_TOKEN_RESOLVED"}})
+	path := writeConfig(t, map[string]any{"poll": map[string]any{"filter": map[string]any{"titleContains": "$TEST_TOKEN_RESOLVED"}}})
 	if _, err := config.Load(path); err != nil {
 		t.Fatal(err)
 	}
@@ -194,15 +194,6 @@ func TestValidate_MissingRequiredFields(t *testing.T) {
 	}
 }
 
-func TestValidate_KibanaNotValidatedHere(t *testing.T) {
-	// Kibana auth is kibana-cli's own concern; config no longer validates it.
-	cfg := validConfig()
-	cfg.Kibana.Host = "https://kibana.example.com"
-	if err := config.Validate(cfg); err != nil {
-		t.Fatalf("kibana creds must not be required by config: %v", err)
-	}
-}
-
 func TestValidate_PollInvalidInterval(t *testing.T) {
 	cfg := validConfig()
 	cfg.Poll.IntervalSeconds = -1
@@ -281,9 +272,7 @@ func TestValidate_AgentType(t *testing.T) {
 
 func validConfig() config.Config {
 	return config.Config{
-		Agent:  config.AgentConfig{Command: `agent -p "Fix bug {issueKey}"`},
-		Jira:   config.JiraConfig{Host: "https://jira.example.com", Token: "tok"},
-		GitLab: config.GitLabConfig{Host: "https://gitlab.example.com", Token: "tok"},
+		Agent: config.AgentConfig{Command: `agent -p "Fix bug {issueKey}"`},
 		Poll: config.PollConfig{
 			IntervalSeconds: 300,
 			MaxConcurrent:   config.DefaultPollMaxConcurrent,
