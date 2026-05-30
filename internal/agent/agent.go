@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -34,12 +35,18 @@ type Options struct {
 	Env map[string]string
 }
 
+// tailBuffer keeps only the last max bytes written. It is written concurrently:
+// os/exec copies the child's stdout and stderr in separate goroutines, and both
+// are wired to the same tailBuffer, so Write must hold the lock.
 type tailBuffer struct {
+	mu  sync.Mutex
 	buf []byte
 	max int
 }
 
 func (b *tailBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	b.buf = append(b.buf, p...)
 	if b.max > 0 && len(b.buf) > b.max {
 		b.buf = b.buf[len(b.buf)-b.max:]
@@ -48,6 +55,8 @@ func (b *tailBuffer) Write(p []byte) (int, error) {
 }
 
 func (b *tailBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	return string(b.buf)
 }
 
