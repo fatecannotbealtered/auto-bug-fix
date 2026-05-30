@@ -69,7 +69,7 @@ AUTO_BUG_FIX_RESULT outcome=needs-info
 
    Foreground `auto-bug-fix start` is still available for debugging (Ctrl+C to stop).
 
-6. **Verify before finishing:** confirm `jira-cli` and `gitlab-cli` are authenticated (see Prerequisites below). If not, guide the human through their login commands.
+6. **Verify before finishing:** run `auto-bug-fix doctor --json` and parse it. It returns `{"ok": bool, "checks": [{"level": "OK|WARN|FAIL", "name", "detail"}]}` on stdout (config-loading warnings go to stderr). Act on it programmatically: any `FAIL` blocks the first fix — typically a missing CLI to install or an unset token env var; a `WARN` (e.g. optional `kibana-cli` absent) is safe to proceed past. `doctor` does not check authentication, so also confirm `jira-cli` and `gitlab-cli` are logged in (see Prerequisites below) and guide the human through their login commands if not.
 
 ## Prerequisites
 
@@ -140,7 +140,7 @@ AUTO_BUG_FIX_RESULT outcome=needs-info handoff=<repo-relative-handoff-path>
 
 You drive `jira-cli`, `gitlab-cli`, and optionally `kibana-cli`. They are agent-oriented:
 
-- Always request machine output: `jira-cli ... --json`; `gitlab-cli ... --json --compact`.
+- Always request machine output: `jira-cli ... --json`; `gitlab-cli ... --json --compact`. The same applies to `auto-bug-fix` itself — pass `--json` to `doctor`, `status`, `stop`, and `start --detach` so you parse a result instead of prose. (Foreground `start` streams operational logs and `fix` proxies the child agent's output, so those stay log/marker based.)
 - **The commands below are illustrative shapes, not fixed scripts.** Confirm exact subcommands and flags for the installed version with `jira-cli reference` and `gitlab-cli reference --json --compact` (or `--help`) instead of guessing.
 - The shell snippets are POSIX — **translate them to the OS you run on** (PowerShell on Windows, etc.).
 - `gitlab-cli` write commands may require `--confirm <token>` after a `--dry-run --json` preview.

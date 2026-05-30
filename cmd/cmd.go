@@ -77,15 +77,20 @@ func Execute() {
 	}
 }
 
+func printJSON(v any) {
+	b, _ := json.MarshalIndent(v, "", "  ")
+	fmt.Println(string(b))
+}
+
 func printUsage() {
 	fmt.Println(`auto-bug-fix - autonomous bug fix tool
 
 Usage:
   auto-bug-fix setup [--agent type]   Create config template
-  auto-bug-fix start [--detach]       Start polling loop (--detach runs in background)
-  auto-bug-fix stop                   Stop the background poller and its child agents
-  auto-bug-fix status                 Show whether the background poller is running
-  auto-bug-fix doctor                 Check config and required CLIs (agent, jira-cli, gitlab-cli, git)
+  auto-bug-fix start [--detach] [--json]   Start polling loop (--detach runs in background)
+  auto-bug-fix stop [--json]          Stop the background poller and its child agents
+  auto-bug-fix status [--json]        Show whether the background poller is running
+  auto-bug-fix doctor [--json]        Check config and required CLIs (agent, jira-cli, gitlab-cli, git)
   auto-bug-fix fix <issueKey>         Manually trigger a fix
   auto-bug-fix version                Print version`)
 }
@@ -215,6 +220,7 @@ func runStart(args []string) {
 	cfgPath := defaultConfigPath()
 	cfgSet := false
 	detach := false
+	asJSON := false
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--config":
@@ -226,6 +232,8 @@ func runStart(args []string) {
 			i++
 		case "--detach", "-d":
 			detach = true
+		case "--json":
+			asJSON = true
 		}
 	}
 
@@ -239,6 +247,7 @@ func runStart(args []string) {
 
 	// Detached start: re-spawn ourselves in the background and return immediately.
 	if detach {
+		preflight(cfgPath) // fail fast in the foreground; don't background a doomed poller
 		bin, err := os.Executable()
 		if err != nil {
 			log.Fatalf("start: %v", err)
@@ -252,20 +261,22 @@ func runStart(args []string) {
 			log.Fatalf("start: %v", err)
 		}
 		if already {
+			if asJSON {
+				printJSON(map[string]any{"started": false, "alreadyRunning": true, "pid": pid, "logPath": defaultLogPath()})
+				return
+			}
 			fmt.Printf("auto-bug-fix poller already running (PID %d)\n", pid)
+			return
+		}
+		if asJSON {
+			printJSON(map[string]any{"started": true, "alreadyRunning": false, "pid": pid, "logPath": defaultLogPath()})
 			return
 		}
 		fmt.Printf("auto-bug-fix poller started (PID %d), logs at %s\n", pid, defaultLogPath())
 		return
 	}
 
-	cfg, err := config.Load(cfgPath)
-	if err != nil {
-		log.Fatalf("start: %v", err)
-	}
-	if err := config.Validate(cfg); err != nil {
-		log.Fatalf("start: invalid config: %v", err)
-	}
+	cfg := preflight(cfgPath)
 
 	interval := time.Duration(cfg.Poll.IntervalSeconds) * time.Second
 	if interval <= 0 {
@@ -346,13 +357,7 @@ func runFix(issueKey string, args []string) {
 		}
 	}
 
-	cfg, err := config.Load(cfgPath)
-	if err != nil {
-		log.Fatalf("fix: %v", err)
-	}
-	if err := config.Validate(cfg); err != nil {
-		log.Fatalf("fix: invalid config: %v", err)
-	}
+	cfg := preflight(cfgPath)
 
 	log.Printf("[auto-bug-fix] Triggering fix for %s...", issueKey)
 	result, err := agent.Trigger(issueKey, cfg.Agent.Command, agentOptions(cfg))
@@ -373,17 +378,25 @@ func runFix(issueKey string, args []string) {
 
 // ── stop / status ─────────────────────────────────────────────────────────────
 
-func runStop(_ []string) {
+func runStop(args []string) {
 	if err := daemon.Stop(defaultPIDPath()); err != nil {
 		log.Fatalf("stop: %v", err)
+	}
+	if hasFlag(args, "--json") {
+		printJSON(map[string]any{"stopped": true})
+		return
 	}
 	fmt.Println("auto-bug-fix poller stopped")
 }
 
-func runStatus(_ []string) {
+func runStatus(args []string) {
 	running, pid, err := daemon.Status(defaultPIDPath())
 	if err != nil {
 		log.Fatalf("status: %v", err)
+	}
+	if hasFlag(args, "--json") {
+		printJSON(map[string]any{"running": running, "pid": pid, "logPath": defaultLogPath()})
+		return
 	}
 	if running {
 		fmt.Printf("auto-bug-fix poller running (PID %d), logs at %s\n", pid, defaultLogPath())
@@ -392,14 +405,52 @@ func runStatus(_ []string) {
 	}
 }
 
+func hasFlag(args []string, flag string) bool {
+	for _, a := range args {
+		if a == flag {
+			return true
+		}
+	}
+	return false
+}
+
 // ── doctor ────────────────────────────────────────────────────────────────────
+
+// preflight loads + validates config and runs doctor checks. It aborts the
+// process when any required check fails, so we never spawn an agent into a
+// broken environment (missing CLI, invalid config). Returns the loaded config.
+func preflight(cfgPath string) config.Config {
+	cfg, err := config.Load(cfgPath)
+	if err == nil {
+		err = config.Validate(cfg)
+	}
+	checks := doctor.Run(cfg, err, exec.LookPath)
+	failed := doctor.HasFailure(checks)
+	// Surface every non-OK check: FAIL blocks, WARN is a reminder (e.g. an
+	// optional CLI missing) so a passing preflight is never silent about gaps.
+	for _, c := range checks {
+		if c.Level != doctor.OK {
+			fmt.Fprintf(os.Stderr, "[%s] %s: %s\n", c.Level, c.Name, c.Detail)
+		}
+	}
+	if failed {
+		log.Fatalf("preflight failed; fix the [FAIL] items above (see `auto-bug-fix doctor`) before continuing")
+	}
+	return cfg
+}
 
 func runDoctor(args []string) {
 	cfgPath := defaultConfigPath()
+	asJSON := false
 	for i := 0; i < len(args); i++ {
-		if args[i] == "--config" && i+1 < len(args) {
-			cfgPath = args[i+1]
-			i++
+		switch args[i] {
+		case "--config":
+			if i+1 < len(args) {
+				cfgPath = args[i+1]
+				i++
+			}
+		case "--json":
+			asJSON = true
 		}
 	}
 
@@ -409,10 +460,35 @@ func runDoctor(args []string) {
 	}
 
 	checks := doctor.Run(cfg, err, exec.LookPath)
+	ok := !doctor.HasFailure(checks)
+
+	// Agent-facing: --json emits a parseable result on stdout so the calling
+	// agent can branch programmatically (config.Load env warnings go to stderr).
+	if asJSON {
+		type jcheck struct {
+			Level  string `json:"level"`
+			Name   string `json:"name"`
+			Detail string `json:"detail"`
+		}
+		out := struct {
+			OK     bool     `json:"ok"`
+			Checks []jcheck `json:"checks"`
+		}{OK: ok, Checks: make([]jcheck, 0, len(checks))}
+		for _, c := range checks {
+			out.Checks = append(out.Checks, jcheck{c.Level.String(), c.Name, c.Detail})
+		}
+		b, _ := json.MarshalIndent(out, "", "  ")
+		fmt.Println(string(b))
+		if !ok {
+			os.Exit(1)
+		}
+		return
+	}
+
 	for _, c := range checks {
 		fmt.Printf("[%s] %s: %s\n", c.Level, c.Name, c.Detail)
 	}
-	if doctor.HasFailure(checks) {
+	if !ok {
 		fmt.Println("\nSome required checks failed. Install/authenticate the missing tools, then re-run.")
 		os.Exit(1)
 	}
