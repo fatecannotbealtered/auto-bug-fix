@@ -16,6 +16,7 @@ type Level int
 
 const (
 	OK Level = iota
+	Info
 	Warn
 	Fail
 )
@@ -24,6 +25,8 @@ func (l Level) String() string {
 	switch l {
 	case OK:
 		return "OK"
+	case Info:
+		return "INFO"
 	case Warn:
 		return "WARN"
 	default:
@@ -78,6 +81,11 @@ func Run(cfg config.Config, cfgErr error, look LookPath, probe Probe, tmpl Templ
 		capabilityCheck(look, probe, "gitlab-cli", true),
 		capabilityCheck(look, probe, "kibana-cli", false),
 	)
+	// Informational: surface where repos get cloned so the user is aware of the
+	// disk location (the default lives under home — C:\ on Windows). Never blocks.
+	if cfg.Workspace.Root != "" {
+		checks = append(checks, Check{"workspace", Info, "repos are cloned to " + cfg.Workspace.Root})
+	}
 	return checks
 }
 

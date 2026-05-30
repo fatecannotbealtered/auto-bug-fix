@@ -12,6 +12,7 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - **`doctor` command** — preflight that checks config validity, that the agent CLI (argv[0] of `agent.command`) and `git` are on PATH, that the **subagent template is installed** for the configured `agentType` (FAIL if `setup --agent` was skipped; WARN for a custom command that can't be verified), and that the capability CLIs are actually **usable**: it delegates to each sibling CLI's own `doctor --json` to confirm `jira-cli`/`gitlab-cli` (required) and `kibana-cli` (optional) are authenticated and reachable. Supports `--json` for agent consumption and exits non-zero on any required failure.
 - **`--json` on lifecycle commands** — `doctor`, `status`, `stop`, and `start --detach` emit structured JSON (human-readable stays the default, matching `jira-cli`/`gitlab-cli`).
 - **Preflight gate** — `start` and `fix` run the doctor checks before spawning an agent and abort on any required failure, so an agent is never launched into a broken environment.
+- **Effective-location awareness** — `doctor` emits an `INFO` line echoing `workspace.root` (where repos are cloned, default under home / C:\ on Windows), so users and agents notice the disk location instead of silently accepting the default.
 
 ### Changed
 

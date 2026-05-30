@@ -45,7 +45,7 @@ AUTO_BUG_FIX_RESULT outcome=needs-info
      3. **排除哪些状态？** (`excludeStatuses`) — status names to skip, e.g. `["已关闭", "Done"]`. Leave blank = skip nothing extra (already excludes Done category by default).
    - `poll.intervalSeconds` — polling interval in seconds (default 300; ask only if they want a different value).
    - `poll.maxConcurrent` — maximum simultaneous agent fixes (default 3; ask only if they want a different value).
-   - `workspace.root` — local clone root (default `~/.auto-bug-fix/workspaces`).
+   - `workspace.root` — local clone root (default `~/.auto-bug-fix/workspaces`). Worth surfacing to the human: repos are cloned here and can grow large; the default sits under home (C:\ on Windows), so offer to relocate it (e.g. another drive) if they prefer. `auto-bug-fix doctor` echoes the effective location.
    - `workspace.cleanup` — cleanup policy: `keep` (default), `on-success`, or `always`.
    - `knowledge.dir` — repo-local business knowledge directory (default `.tcl`).
    - `knowledge.read` / `knowledge.update` / `knowledge.handoff` — default `true`.

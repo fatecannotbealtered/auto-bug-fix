@@ -133,6 +133,18 @@ func TestRun_TemplateUnverifiableWarnsOnly(t *testing.T) {
 	}
 }
 
+func TestRun_WorkspaceSurfacedAsInfo(t *testing.T) {
+	cfg := cfgWith("kiro-cli", "kiro")
+	cfg.Workspace.Root = "/data/abf/workspaces"
+	checks := Run(cfg, nil, lookFake(allPresent()), probeFake(allAuthed()), tmplInstalled)
+	if HasFailure(checks) {
+		t.Fatalf("workspace info must not fail, got %+v", checks)
+	}
+	if got := levelOf(checks, "workspace"); got != Info {
+		t.Errorf("workspace should be INFO, got %v", got)
+	}
+}
+
 func TestRun_ConfigErrorFails(t *testing.T) {
 	checks := Run(cfgWith("kiro-cli", "kiro"), errors.New("agent.command is required"), lookFake(allPresent()), probeFake(allAuthed()), tmplInstalled)
 	if !HasFailure(checks) {
