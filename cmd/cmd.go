@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strconv"
@@ -16,6 +17,7 @@ import (
 	"github.com/fatecannotbealtered/auto-bug-fix/internal/agent"
 	"github.com/fatecannotbealtered/auto-bug-fix/internal/config"
 	"github.com/fatecannotbealtered/auto-bug-fix/internal/daemon"
+	"github.com/fatecannotbealtered/auto-bug-fix/internal/doctor"
 	"github.com/fatecannotbealtered/auto-bug-fix/internal/installer"
 	"github.com/fatecannotbealtered/auto-bug-fix/internal/poller"
 	"github.com/fatecannotbealtered/auto-bug-fix/internal/state"
@@ -59,6 +61,8 @@ func Execute() {
 		runStop(os.Args[2:])
 	case "status":
 		runStatus(os.Args[2:])
+	case "doctor":
+		runDoctor(os.Args[2:])
 	case "fix":
 		if len(os.Args) < 3 {
 			fmt.Fprintln(os.Stderr, "usage: auto-bug-fix fix <issueKey>")
@@ -81,6 +85,7 @@ Usage:
   auto-bug-fix start [--detach]       Start polling loop (--detach runs in background)
   auto-bug-fix stop                   Stop the background poller and its child agents
   auto-bug-fix status                 Show whether the background poller is running
+  auto-bug-fix doctor                 Check config and required CLIs (agent, jira-cli, gitlab-cli, git)
   auto-bug-fix fix <issueKey>         Manually trigger a fix
   auto-bug-fix version                Print version`)
 }
@@ -385,4 +390,31 @@ func runStatus(_ []string) {
 	} else {
 		fmt.Println("auto-bug-fix poller not running")
 	}
+}
+
+// ── doctor ────────────────────────────────────────────────────────────────────
+
+func runDoctor(args []string) {
+	cfgPath := defaultConfigPath()
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--config" && i+1 < len(args) {
+			cfgPath = args[i+1]
+			i++
+		}
+	}
+
+	cfg, err := config.Load(cfgPath)
+	if err == nil {
+		err = config.Validate(cfg)
+	}
+
+	checks := doctor.Run(cfg, err, exec.LookPath)
+	for _, c := range checks {
+		fmt.Printf("[%s] %s: %s\n", c.Level, c.Name, c.Detail)
+	}
+	if doctor.HasFailure(checks) {
+		fmt.Println("\nSome required checks failed. Install/authenticate the missing tools, then re-run.")
+		os.Exit(1)
+	}
+	fmt.Println("\nAll required checks passed.")
 }

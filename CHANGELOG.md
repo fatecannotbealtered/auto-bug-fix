@@ -5,6 +5,14 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **`doctor` command** — read-only preflight that checks config validity and the presence on PATH of the agent CLI (argv[0] of `agent.command`) plus `git`, `jira-cli`, `gitlab-cli` (required) and `kibana-cli` (optional). Exits non-zero if any required check fails. No network calls — each tool's own `doctor`/`login` still owns authentication.
+
+---
+
 ## [1.0.0] - 2026-05-29
 
 Initial release — a deterministic scheduler that polls Jira for Bugs and hands each one to a configured AI agent. The Go binary owns config, polling, idempotency, process launch, and audit; the bug-fix workflow lives in the agent templates.

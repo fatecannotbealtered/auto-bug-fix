@@ -63,7 +63,10 @@ gitlab-cli auth login --host https://gitlab.company.com --token <PAT>
 auto-bug-fix setup --agent codex   # 或：kiro、cursor、claude-code
 # 编辑配置：填写 host、token 和 poll.filter
 
-# 4. 启动轮询（后台运行）
+# 4. 校验前置依赖
+auto-bug-fix doctor   # 检查 config + 必需 CLI（agent、jira-cli、gitlab-cli、git）是否在 PATH
+
+# 5. 启动轮询（后台运行）
 auto-bug-fix start --detach   # 日志在 ~/.auto-bug-fix/poller.log；`auto-bug-fix stop` 停止
 
 # 手动触发
@@ -179,6 +182,7 @@ your-agent exec "Fix bug $1 using the auto-bug-fix skill"
 ## 运行 poller
 
 ```bash
+auto-bug-fix doctor           # 预检：config 有效 + 必需 CLI 在 PATH（任一必需项失败则退出码 1）
 auto-bug-fix start --detach   # 后台；PID 在 ~/.auto-bug-fix/poller.pid，日志在 ~/.auto-bug-fix/poller.log
 auto-bug-fix status           # 运行中的 PID + 日志路径，或 "not running"
 auto-bug-fix stop             # 终止 poller 及其在跑的子 agent，并删除 PID 文件

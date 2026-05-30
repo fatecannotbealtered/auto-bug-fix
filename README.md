@@ -63,7 +63,10 @@ gitlab-cli auth login --host https://gitlab.company.com --token <PAT>
 auto-bug-fix setup --agent codex   # or: kiro, cursor, claude-code
 # edit the config: fill in hosts, tokens, and poll.filter
 
-# 4. Start polling (background)
+# 4. Verify prerequisites
+auto-bug-fix doctor   # checks config + required CLIs (agent, jira-cli, gitlab-cli, git) on PATH
+
+# 5. Start polling (background)
 auto-bug-fix start --detach   # logs to ~/.auto-bug-fix/poller.log; `auto-bug-fix stop` to stop
 
 # Manual trigger
@@ -179,6 +182,7 @@ Keep secrets in environment variables and reference them as `$VAR` (e.g. `"token
 ## Running the poller
 
 ```bash
+auto-bug-fix doctor           # preflight: config valid + required CLIs on PATH (exit 1 if any required check fails)
 auto-bug-fix start --detach   # background; PID at ~/.auto-bug-fix/poller.pid, logs at ~/.auto-bug-fix/poller.log
 auto-bug-fix status           # running PID + log path, or "not running"
 auto-bug-fix stop             # terminate the poller AND its in-flight fix agents, then remove the PID file
