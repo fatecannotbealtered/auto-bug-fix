@@ -162,7 +162,7 @@ Also note `errorKeywords`, `environment`/locale, and the reproduction steps.
 
 ### Step 2 — Prepare the working copy and branch
 
-1. Resolve the repo: `gitlab-cli project get <serviceName> --json`. Read the clone URL (`ssh_url_to_repo` / `http_url_to_repo`) and `default_branch` — **do not assume the default branch is `main`.**
+1. Resolve the repo to its full GitLab path. `gitlab-cli project get` needs the **full namespaced path** (`group/subgroup/name`) or a numeric ID — a **bare service name will 404**. So if `serviceName` is a bare name, resolve it with `gitlab-cli search projects --query "<serviceName>" --json` and take a match **only if it is unambiguous** (exactly one result, or one whose name matches exactly); on **zero or multiple** plausible matches, stop with `needs-info` rather than picking one. Then `gitlab-cli project get <full-path> --json`, and read the clone URL (`ssh_url_to_repo` / `http_url_to_repo`) and `default_branch` — **do not assume the default branch is `main`.** (Searching here only resolves a service the ticket **named**; that is not the same as guessing an unnamed service, which Step 1 forbids.)
 2. The **base branch is the development branch from the ticket** (Step 1 `baseBranch`).
 3. **Reuse an existing checkout — never clone redundantly.** The working copy lives at `$AUTO_BUG_FIX_WORKSPACE_ROOT/<serviceName>` — **one per repo, reused across tickets, with no per-ticket subdirectory** — so warm build caches and dependencies are not thrown away on every run.
    - **Exists and clean** (`git status --porcelain` is empty): record the current branch (to restore later), then `git fetch`.
