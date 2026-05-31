@@ -165,7 +165,7 @@ func installAgentTemplate(agentType string) {
 		if err := installer.InstallKiro(home); err != nil {
 			log.Fatalf("setup: install kiro agent: %v", err)
 		}
-		fmt.Println("Kiro agent configured at ~/.kiro/agents/auto-bug-fix.json")
+		fmt.Println("Kiro agent configured at ~/.kiro/agents/auto-bug-fix.json (prompt: auto-bug-fix.md)")
 	case "cursor":
 		if err := installer.InstallCursor(home); err != nil {
 			log.Fatalf("setup: install cursor rule: %v", err)

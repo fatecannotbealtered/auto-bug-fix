@@ -34,11 +34,18 @@ func TestInstallKiro_CreatesFiles(t *testing.T) {
 	if err := json.Unmarshal(b, &agent); err != nil {
 		t.Fatalf("agent JSON invalid: %v", err)
 	}
-	if p, _ := agent["prompt"].(string); !strings.Contains(p, "AUTO_BUG_FIX_RESULT") {
-		t.Error("agent prompt should inline the execution workflow")
+	if p, _ := agent["prompt"].(string); p != "file://./auto-bug-fix.md" {
+		t.Errorf("agent prompt should reference the prompt file, got %q", p)
 	}
 	if _, ok := agent["resources"]; ok {
 		t.Error("standard kiro agent must own its prompt, not borrow a skill resource")
+	}
+	md, err := os.ReadFile(filepath.Join(home, ".kiro", "agents", "auto-bug-fix.md"))
+	if err != nil {
+		t.Fatal("prompt markdown not created")
+	}
+	if !strings.Contains(string(md), "AUTO_BUG_FIX_RESULT") {
+		t.Error("prompt markdown should contain the execution workflow")
 	}
 	if _, err := os.Stat(filepath.Join(home, ".kiro", "skills", "auto-bug-fix", "SKILL.md")); !os.IsNotExist(err) {
 		t.Error("setup --agent kiro must not write skills/ (the operator skill is installed via npx)")

@@ -12,7 +12,7 @@ import (
 // instead of silently drifting in production.
 func TestAgentTemplates_ShareLoadBearingPolicy(t *testing.T) {
 	templates := map[string]string{
-		"kiro":        "kiro/SKILL.md",
+		"kiro":        "kiro/auto-bug-fix.md",
 		"claude-code": "claude-code/auto-bug-fix.md",
 		"cursor":      "cursor/auto-bug-fix.mdc",
 		"codex":       "codex/AGENTS.md",

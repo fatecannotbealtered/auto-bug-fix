@@ -23,6 +23,7 @@ func ArtifactPaths(agentType, home string) []string {
 	case "kiro":
 		return []string{
 			filepath.Join(home, ".kiro", "agents", "auto-bug-fix.json"),
+			filepath.Join(home, ".kiro", "agents", "auto-bug-fix.md"),
 		}
 	case "cursor":
 		return []string{filepath.Join(home, ".cursor", "rules", "auto-bug-fix.mdc")}
@@ -35,17 +36,18 @@ func ArtifactPaths(agentType, home string) []string {
 	}
 }
 
-// InstallKiro writes the standard kiro subagent definition to ~/.kiro/agents/.
-// The execution workflow is inlined into the agent's `prompt` (like every other
-// kiro agent) rather than borrowed from a skill — so the spawned subagent owns
-// its instructions and the skills/ directory is left for the operator skill
+// InstallKiro writes the standard kiro subagent definition to ~/.kiro/agents/:
+// a small JSON config plus an editable Markdown prompt file it references via a
+// relative `file://./auto-bug-fix.md` URI (resolved against the config's own
+// directory). The execution workflow lives in that prompt file — owned by the
+// spawned subagent — leaving the skills/ directory for the operator skill
 // (installed separately via `npx skills add`).
 func InstallKiro(home string) error {
 	agentJSON, err := readAgentFile("kiro", "auto-bug-fix.json")
 	if err != nil {
 		return err
 	}
-	workflowMD, err := readAgentFile("kiro", "SKILL.md")
+	workflowMD, err := readAgentFile("kiro", "auto-bug-fix.md")
 	if err != nil {
 		return err
 	}
@@ -54,7 +56,7 @@ func InstallKiro(home string) error {
 	if err := json.Unmarshal([]byte(agentJSON), &agent); err != nil {
 		return fmt.Errorf("parse kiro agent json: %w", err)
 	}
-	agent["prompt"] = stripFrontmatter(workflowMD)
+	agent["prompt"] = "file://./auto-bug-fix.md"
 	delete(agent, "resources")
 
 	out, err := json.MarshalIndent(agent, "", "  ")
@@ -65,6 +67,9 @@ func InstallKiro(home string) error {
 	agentDir := filepath.Join(home, ".kiro", "agents")
 	if err := os.MkdirAll(agentDir, 0o755); err != nil {
 		return fmt.Errorf("create kiro agents dir: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "auto-bug-fix.md"), []byte(stripFrontmatter(workflowMD)), 0o644); err != nil {
+		return fmt.Errorf("write kiro prompt file: %w", err)
 	}
 	return os.WriteFile(filepath.Join(agentDir, "auto-bug-fix.json"), out, 0o644)
 }
