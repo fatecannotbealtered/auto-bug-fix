@@ -196,7 +196,7 @@ pwd
 git status --short
 ```
 
-Write the minimal fix in the local repo. Do not refactor unrelated code. Do not commit yet.
+Write the minimal fix in the local repo — a surgical change to the **single root cause**. Do not refactor unrelated code, and **do not add redundant or speculative fallback paths** (e.g. routing the same case through a second mechanism); if the same fix is genuinely needed on another code path, apply the **same** change there rather than introducing a different one. Do not commit yet.
 
 ### Step 6 — Unit tests
 

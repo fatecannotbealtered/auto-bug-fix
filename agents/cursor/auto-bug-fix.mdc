@@ -154,7 +154,7 @@ If still inconclusive → apply the Confidence Gate.
 
 ### Step 5 — Write the minimal fix
 
-Change only what the root cause requires. Do not refactor unrelated code. Do not commit yet.
+A surgical change to the **single root cause** — change only what it requires. Do not refactor unrelated code, and **do not add redundant or speculative fallback paths** (e.g. routing the same case through a second mechanism). If the same fix is genuinely needed on another code path, apply the **same** change there — do not introduce a different mechanism. Do not commit yet.
 
 ### Step 6 — Reproduce and verify with tests
 
