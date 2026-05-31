@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
 	"testing"
 	"time"
 
@@ -108,21 +109,24 @@ func TestParseResultMarker(t *testing.T) {
 // TestHelperProcess is re-executed as the spawned "agent" (and its grandchild)
 // to reproduce a long-lived grandchild holding the inherited stdout pipe.
 func TestHelperProcess(t *testing.T) {
-	switch os.Getenv("ABF_HELPER") {
-	case "marker_then_orphan":
-		// Print the result marker, then spawn a grandchild that inherits stdout
-		// and outlives us — mimicking the Gradle daemon. Exit without waiting.
-		fmt.Println("AUTO_BUG_FIX_RESULT outcome=auto-fix")
-		gc := exec.Command(os.Args[0], "-test.run=^TestHelperProcess$") //nolint:gosec
-		gc.Env = append(os.Environ(), "ABF_HELPER=sleep")
-		gc.Stdout = os.Stdout
-		gc.Stderr = os.Stderr
-		_ = gc.Start()
-		os.Exit(0)
-	case "sleep":
-		time.Sleep(3 * time.Second)
-		os.Exit(0)
+	if os.Getenv("ABF_HELPER") != "marker_then_orphan" {
+		return
 	}
+	// Print the result marker, then spawn a long-lived grandchild that inherits
+	// our stdout pipe and outlives us — mimicking the Gradle daemon. Use a stock
+	// OS command (NOT the test binary) so it does not lock agent.test.exe on
+	// Windows, which would break `go test`'s post-run cleanup. Exit without waiting.
+	fmt.Println("AUTO_BUG_FIX_RESULT outcome=auto-fix")
+	var gc *exec.Cmd
+	if runtime.GOOS == "windows" {
+		gc = exec.Command("ping", "-n", "4", "127.0.0.1") //nolint:gosec
+	} else {
+		gc = exec.Command("sleep", "3") //nolint:gosec
+	}
+	gc.Stdout = os.Stdout
+	gc.Stderr = os.Stderr
+	_ = gc.Start()
+	os.Exit(0)
 }
 
 // TestTrigger_DoesNotHangOnOrphanPipe guards the WaitDelay fix: when the agent
