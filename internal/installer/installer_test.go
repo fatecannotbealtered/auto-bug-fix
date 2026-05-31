@@ -1,6 +1,7 @@
 package installer_test
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,11 +26,22 @@ func TestInstallKiro_CreatesFiles(t *testing.T) {
 	if err := installer.InstallKiro(home); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(home, ".kiro", "agents", "auto-bug-fix.json")); err != nil {
+	b, err := os.ReadFile(filepath.Join(home, ".kiro", "agents", "auto-bug-fix.json"))
+	if err != nil {
 		t.Fatal("agent JSON not created")
 	}
-	if _, err := os.Stat(filepath.Join(home, ".kiro", "skills", "auto-bug-fix", "SKILL.md")); err != nil {
-		t.Fatal("SKILL.md not created")
+	var agent map[string]any
+	if err := json.Unmarshal(b, &agent); err != nil {
+		t.Fatalf("agent JSON invalid: %v", err)
+	}
+	if p, _ := agent["prompt"].(string); !strings.Contains(p, "AUTO_BUG_FIX_RESULT") {
+		t.Error("agent prompt should inline the execution workflow")
+	}
+	if _, ok := agent["resources"]; ok {
+		t.Error("standard kiro agent must own its prompt, not borrow a skill resource")
+	}
+	if _, err := os.Stat(filepath.Join(home, ".kiro", "skills", "auto-bug-fix", "SKILL.md")); !os.IsNotExist(err) {
+		t.Error("setup --agent kiro must not write skills/ (the operator skill is installed via npx)")
 	}
 }
 

@@ -1,6 +1,7 @@
 package installer
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -21,7 +22,6 @@ func ArtifactPaths(agentType, home string) []string {
 	switch agentType {
 	case "kiro":
 		return []string{
-			filepath.Join(home, ".kiro", "skills", "auto-bug-fix", "SKILL.md"),
 			filepath.Join(home, ".kiro", "agents", "auto-bug-fix.json"),
 		}
 	case "cursor":
@@ -35,30 +35,50 @@ func ArtifactPaths(agentType, home string) []string {
 	}
 }
 
-// InstallKiro writes the kiro agent config and execution SKILL.md to ~/.kiro/.
+// InstallKiro writes the standard kiro subagent definition to ~/.kiro/agents/.
+// The execution workflow is inlined into the agent's `prompt` (like every other
+// kiro agent) rather than borrowed from a skill — so the spawned subagent owns
+// its instructions and the skills/ directory is left for the operator skill
+// (installed separately via `npx skills add`).
 func InstallKiro(home string) error {
 	agentJSON, err := readAgentFile("kiro", "auto-bug-fix.json")
 	if err != nil {
 		return err
 	}
-	skillMD, err := readAgentFile("kiro", "SKILL.md")
+	workflowMD, err := readAgentFile("kiro", "SKILL.md")
 	if err != nil {
 		return err
 	}
 
-	skillDir := filepath.Join(home, ".kiro", "skills", "auto-bug-fix")
-	if err := os.MkdirAll(skillDir, 0o755); err != nil {
-		return fmt.Errorf("create kiro skills dir: %w", err)
+	var agent map[string]any
+	if err := json.Unmarshal([]byte(agentJSON), &agent); err != nil {
+		return fmt.Errorf("parse kiro agent json: %w", err)
 	}
-	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(skillMD), 0o644); err != nil {
-		return fmt.Errorf("write kiro SKILL.md: %w", err)
+	agent["prompt"] = stripFrontmatter(workflowMD)
+	delete(agent, "resources")
+
+	out, err := json.MarshalIndent(agent, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal kiro agent json: %w", err)
 	}
 
 	agentDir := filepath.Join(home, ".kiro", "agents")
 	if err := os.MkdirAll(agentDir, 0o755); err != nil {
 		return fmt.Errorf("create kiro agents dir: %w", err)
 	}
-	return os.WriteFile(filepath.Join(agentDir, "auto-bug-fix.json"), []byte(agentJSON), 0o644)
+	return os.WriteFile(filepath.Join(agentDir, "auto-bug-fix.json"), out, 0o644)
+}
+
+// stripFrontmatter removes a leading YAML frontmatter block (--- ... ---) so the
+// markdown body can be used directly as an agent prompt.
+func stripFrontmatter(md string) string {
+	s := strings.ReplaceAll(md, "\r\n", "\n")
+	if strings.HasPrefix(s, "---\n") {
+		if idx := strings.Index(s[4:], "\n---\n"); idx >= 0 {
+			return strings.TrimLeft(s[4+idx+len("\n---\n"):], "\n")
+		}
+	}
+	return s
 }
 
 // InstallCursor writes the cursor rule to ~/.cursor/rules/auto-bug-fix.mdc.

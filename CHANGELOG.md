@@ -7,6 +7,10 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed
+
+- **`setup --agent kiro` now generates a standard kiro subagent.** The execution workflow is inlined into the agent's `prompt` (like every other kiro agent) instead of being borrowed from a skill via `resources: skill://…`, and setup no longer writes anything under `~/.kiro/skills/`. This cleanly separates the two audiences: the **operator skill** (`skills/auto-bug-fix/SKILL.md`, installed via `npx skills add`) is what the main agent discovers, while the **executor workflow** lives in the spawned subagent's own prompt under `~/.kiro/agents/`. Previously both shared `~/.kiro/skills/auto-bug-fix/SKILL.md`, so a new main-agent session saw the execution steps instead of the operator skill.
+
 ## [1.0.1] - 2026-06-01
 
 ### Added

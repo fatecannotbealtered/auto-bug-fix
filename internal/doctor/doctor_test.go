@@ -41,7 +41,7 @@ func tmplMissing(agentType string) ([]string, bool) {
 	if agentType == "" {
 		return nil, false
 	}
-	return []string{"/home/.kiro/skills/auto-bug-fix/SKILL.md"}, true
+	return []string{"/home/.kiro/agents/auto-bug-fix.json"}, true
 }
 
 func levelOf(checks []Check, name string) Level {
