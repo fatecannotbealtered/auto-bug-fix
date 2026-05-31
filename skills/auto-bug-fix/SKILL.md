@@ -36,7 +36,7 @@ description: How to install, configure, and run the auto-bug-fix poller. The per
    - `poll.filter` — ask three plain questions (all optional; skip = use default):
      1. **标题关键词？** (`titleContains`) — only process Bugs whose title contains this string. Leave blank = process all Bugs.
      2. **只处理分配给我的 Bug？** (`assignedToMe`) — default `true`.
-     3. **排除哪些状态？** (`excludeStatuses`) — status names to skip, e.g. `["已关闭", "Done"]`. Leave blank = skip nothing extra (already excludes Done category by default).
+     3. **排除哪些状态？** (`excludeStatuses`) — status names to skip, e.g. `["已关闭", "Done"]`. **Tip: also add the status the fix agent moves tickets to (e.g. `In Progress` / `In Review`), so a ticket already being worked on is not re-picked by the poller before a human merges it.** Leave blank = skip nothing extra (already excludes Done category by default).
    - `poll.intervalSeconds` — polling interval in seconds (default 300; ask only if they want a different value).
    - `poll.maxConcurrent` — maximum simultaneous agent fixes (default 3; ask only if they want a different value).
    - `workspace.root` — local clone root (default `~/.auto-bug-fix/workspaces`). Worth surfacing to the human: repos are cloned here and can grow large; the default sits under home (C:\ on Windows), so offer to relocate it (e.g. another drive) if they prefer. `auto-bug-fix doctor` echoes the effective location.

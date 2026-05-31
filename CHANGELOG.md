@@ -7,6 +7,10 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- **The agent reads ticket comments and won't duplicate an existing fix.** Step 1 now also reads the Jira comments (`jira-cli issue comment list <KEY> --json`) for human clarifications, answers to earlier questions, and prior auto-bug-fix history. Before doing any work, the agent checks for an already-open MR for the ticket (`gitlab-cli mr list --search "<KEY>" --state opened`) — if one exists (or its own prior result comment is present) it stops and reports that MR instead of opening a duplicate. Setup guidance also suggests adding the in-flight status (e.g. `In Progress` / `In Review`) to `poll.filter.excludeStatuses` so the poller doesn't re-pick a ticket already being worked on. Synced across all four agent templates.
+
 ### Changed
 
 - **`setup --agent kiro` now generates a standard kiro subagent.** The execution workflow is inlined into the agent's `prompt` (like every other kiro agent) instead of being borrowed from a skill via `resources: skill://…`, and setup no longer writes anything under `~/.kiro/skills/`. This cleanly separates the two audiences: the **operator skill** (`skills/auto-bug-fix/SKILL.md`, installed via `npx skills add`) is what the main agent discovers, while the **executor workflow** lives in the spawned subagent's own prompt under `~/.kiro/agents/`. Previously both shared `~/.kiro/skills/auto-bug-fix/SKILL.md`, so a new main-agent session saw the execution steps instead of the operator skill.
