@@ -220,7 +220,7 @@ The Go binary is a **deterministic scheduler**: configuration, Jira polling, ide
 - **Credentials stay outside the poller** — the agent relies on its own authenticated CLIs; the poller never injects tokens.
 - **Conservative automation** — the agent only writes code and opens an MR when the root cause is clear and locally testable; otherwise it diagnoses or asks on Jira.
 
-**Non-goals (1.0.1):** no GitLab editing or Kibana calls inside the Go binary, no MR-merge or ticket-close automation, no per-agent adapter framework.
+**Non-goals (1.0.2):** no GitLab editing or Kibana calls inside the Go binary, no MR-merge or ticket-close automation, no per-agent adapter framework.
 
 ---
 

@@ -25,7 +25,7 @@ import (
 )
 
 // version is overridden at release time via -ldflags "-X .../cmd.version=<tag>".
-var version = "1.0.1"
+var version = "1.0.2"
 
 func defaultConfigPath() string {
 	home, _ := os.UserHomeDir()
