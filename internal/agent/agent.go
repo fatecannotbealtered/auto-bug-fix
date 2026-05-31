@@ -33,6 +33,8 @@ type Result struct {
 
 type Options struct {
 	Env map[string]string
+	// WaitDelay overrides the post-exit pipe-close delay (default 10s). Mainly for tests.
+	WaitDelay time.Duration
 }
 
 // tailBuffer keeps only the last max bytes written. It is written concurrently:
@@ -183,6 +185,15 @@ func Trigger(issueKey, command string, options ...Options) (Result, error) {
 	}
 	cmd.Stdout = io.MultiWriter(os.Stdout, output)
 	cmd.Stderr = io.MultiWriter(os.Stderr, output)
+	// The agent may spawn long-lived grandchildren (e.g. the Gradle daemon) that
+	// inherit our stdout/stderr pipe. Once the agent itself exits, force-close the
+	// leftover pipe after a short delay so Wait returns instead of blocking forever
+	// on the daemon's open write end. WaitDelay only fires AFTER the agent exits and
+	// (with no Cancel/Context set) never kills the agent or the daemon.
+	cmd.WaitDelay = 10 * time.Second
+	if len(options) > 0 && options[0].WaitDelay > 0 {
+		cmd.WaitDelay = options[0].WaitDelay
+	}
 	err = cmd.Run()
 	completedAt := time.Now()
 

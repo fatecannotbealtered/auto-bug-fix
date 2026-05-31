@@ -1,8 +1,11 @@
 package agent_test
 
 import (
+	"fmt"
 	"os"
+	"os/exec"
 	"testing"
+	"time"
 
 	"github.com/fatecannotbealtered/auto-bug-fix/internal/agent"
 )
@@ -99,5 +102,51 @@ func TestParseResultMarker(t *testing.T) {
 	}
 	if result.HandoffPath != ".tcl/handoff/PROJ-1.needs-confirmation.md" {
 		t.Fatalf("handoff path: got %q", result.HandoffPath)
+	}
+}
+
+// TestHelperProcess is re-executed as the spawned "agent" (and its grandchild)
+// to reproduce a long-lived grandchild holding the inherited stdout pipe.
+func TestHelperProcess(t *testing.T) {
+	switch os.Getenv("ABF_HELPER") {
+	case "marker_then_orphan":
+		// Print the result marker, then spawn a grandchild that inherits stdout
+		// and outlives us — mimicking the Gradle daemon. Exit without waiting.
+		fmt.Println("AUTO_BUG_FIX_RESULT outcome=auto-fix")
+		gc := exec.Command(os.Args[0], "-test.run=^TestHelperProcess$") //nolint:gosec
+		gc.Env = append(os.Environ(), "ABF_HELPER=sleep")
+		gc.Stdout = os.Stdout
+		gc.Stderr = os.Stderr
+		_ = gc.Start()
+		os.Exit(0)
+	case "sleep":
+		time.Sleep(3 * time.Second)
+		os.Exit(0)
+	}
+}
+
+// TestTrigger_DoesNotHangOnOrphanPipe guards the WaitDelay fix: when the agent
+// exits but a grandchild keeps the stdout pipe open, Trigger must still return
+// promptly (instead of blocking on cmd.Wait forever).
+func TestTrigger_DoesNotHangOnOrphanPipe(t *testing.T) {
+	cmd := os.Args[0] + ` -test.run=^TestHelperProcess$`
+	opts := agent.Options{
+		Env:       map[string]string{"ABF_HELPER": "marker_then_orphan"},
+		WaitDelay: 500 * time.Millisecond,
+	}
+
+	done := make(chan agent.Result, 1)
+	go func() {
+		result, _ := agent.Trigger("PROJ-1", cmd, opts)
+		done <- result
+	}()
+
+	select {
+	case result := <-done:
+		if result.Outcome != "auto-fix" {
+			t.Fatalf("outcome: got %q, want auto-fix", result.Outcome)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Trigger hung: did not return after agent exited (grandchild held the pipe)")
 	}
 }

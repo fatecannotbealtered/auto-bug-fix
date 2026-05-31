@@ -22,6 +22,10 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - **`agent.agentType` is now primary; `agent.command` is derived at runtime.** For a known `agentType` (kiro/cursor/claude-code/codex) the launch command is computed from it on every run, so it always matches the installed subagent template and cannot drift across upgrades. An explicit `agent.command` is only needed for a custom/unknown agent (escape hatch) and, when set alongside a known `agentType`, `doctor` warns that it overrides the derived command. `setup --agent` no longer writes a `command` into config.
 - **Config no longer stores or requires Jira/GitLab/Kibana hosts or tokens.** Those fields are removed from the config schema entirely. Authentication is each sibling CLI's own responsibility (`jira-cli login`, `gitlab-cli auth login`, `kibana-cli auth login`); `auto-bug-fix doctor` verifies usability without reading secrets. `setup` no longer writes credential blocks, and `Validate` no longer requires them.
 
+### Fixed
+
+- **`fix` no longer hangs after the agent finishes.** The foreground `fix` path streamed the agent's output through an `io.MultiWriter` pipe, so `cmd.Wait` blocked until every write end closed — and a Gradle daemon (or any long-lived grandchild) the agent spawned inherited that pipe and kept it open, leaving `fix` stuck even though the agent had already exited and returned its `AUTO_BUG_FIX_RESULT`. A `cmd.WaitDelay` (default 10s, overridable via `Options.WaitDelay`) now force-closes the leftover pipe shortly after the agent exits; with no `Context`/`Cancel` set it never kills the agent or the daemon. (`start --detach` was unaffected — it writes to a real file, not a pipe.)
+
 ---
 
 ## [1.0.0] - 2026-05-29
