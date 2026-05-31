@@ -7,6 +7,8 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-06-01
+
 ### Added
 
 - **`doctor` command** — preflight that checks config validity, that the agent CLI (argv[0] of `agent.command`) and `git` are on PATH, that the **subagent template is installed** for the configured `agentType` (FAIL if `setup --agent` was skipped; WARN for a custom command that can't be verified), and that the capability CLIs are actually **usable**: it delegates to each sibling CLI's own `doctor --json` to confirm `jira-cli`/`gitlab-cli` (required) and `kibana-cli` (optional) are authenticated and reachable. Supports `--json` for agent consumption and exits non-zero on any required failure.
@@ -17,6 +19,8 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- **`agent.command` is derived from `agentType` at runtime.** `setup --agent <type>` now records only `agent.agentType`; the launch command is derived when the poller runs (an explicit `agent.command` is written only for a *custom* agent with no known type). `doctor` warns if an explicit command drifts from the type. Previously setup pre-filled `agent.command`.
+- **Credentials removed from the config schema.** The `jira` / `gitlab` / `kibana` host and token fields are gone from `config.json`; authentication is each capability CLI's own concern (`jira-cli login`, `gitlab-cli auth login`, optional `kibana-cli auth login`), verified by `doctor`. Existing configs that still carry those keys load fine — the extra keys are ignored.
 - **Published `skills/auto-bug-fix/SKILL.md` is now operator-facing only.** The globally-discoverable skill (what the installing/main agent sees) described the full per-ticket execution workflow (Confidence Gate, Steps 1–8, result marker) — which that agent never performs and could be misled into running itself. It now covers only operating the tool: what it is, deployment model, `setup --agent`, config, and the `start`/`stop`/`status`/`fix`/`doctor` lifecycle. The per-ticket bug-fix workflow stays where it belongs — in the spawned agent's instructions under `agents/*` (installed via `setup --agent`), which are unchanged.
 
 - **Stronger "surgical fix" guidance.** Step 5 now explicitly forbids adding redundant or speculative fallback paths (e.g. routing the same case through a second mechanism), not just unrelated refactors; if the same fix is needed on another code path, the agent must apply the *same* change rather than introduce a different mechanism. Synced across the published SKILL and all four agent templates.
@@ -28,6 +32,8 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **No zombie agent processes on Unix.** `killTree` now reaps terminated children (`Wait4`), so stopping the poller no longer leaves defunct processes behind.
+- **Concurrent-safe output capture.** The agent's tail buffer is guarded by a mutex, removing a data race when stdout and stderr are copied at the same time.
 - **`fix` no longer hangs after the agent finishes.** The foreground `fix` path streamed the agent's output through an `io.MultiWriter` pipe, so `cmd.Wait` blocked until every write end closed — and a Gradle daemon (or any long-lived grandchild) the agent spawned inherited that pipe and kept it open, leaving `fix` stuck even though the agent had already exited and returned its `AUTO_BUG_FIX_RESULT`. A `cmd.WaitDelay` (default 10s, overridable via `Options.WaitDelay`) now force-closes the leftover pipe shortly after the agent exits; with no `Context`/`Cancel` set it never kills the agent or the daemon. (`start --detach` was unaffected — it writes to a real file, not a pipe.)
 
 ---

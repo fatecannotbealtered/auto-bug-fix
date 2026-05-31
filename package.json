@@ -1,6 +1,6 @@
 {
   "name": "@fatecannotbealtered-/auto-bug-fix",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Autonomous Jira DC + GitLab bug-fix scheduler — polls Jira for Bugs and dispatches each to your configured AI agent",
   "keywords": [
     "jira",
