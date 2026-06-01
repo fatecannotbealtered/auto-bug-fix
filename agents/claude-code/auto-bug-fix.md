@@ -78,7 +78,7 @@ Write in **business language**, not technical jargon. The audience is product ma
 
 After root-cause analysis (Steps 3–4), choose exactly one result type before writing any code:
 
-- **auto-fix** — root cause is clear, the change is localized to one service, and a test can verify it. Proceed with code, tests, MR, and Jira update.
+- **auto-fix** — root cause is clear **and backed by at least one piece of evidence independent of the code and tests you are about to write** (runtime logs, a reproduction, or a fact stated in the ticket); a test you author does **not** count as root-cause evidence — it only proves the implementation matches your assumption. The change is localized to one service and a test can verify it. If the root cause rests mainly on reading code plus comment inference, with no runtime confirmation, and spans multiple branches or environments → use `auto-diagnose` instead. Proceed with code, tests, MR, and Jira update.
 - **auto-diagnose** — evidence points to a cause or responsible service, but the fix is risky, cross-service, architectural, or unsafe for autonomous editing. Do not create an MR. Post the diagnosis, evidence, and recommended next step in Jira.
 - **needs-info** — reproduction, expected behavior, ownership, or product rule is unclear. Do not create an MR. Ask specific, answerable questions in Jira and transition to a needs-info state when available.
 
@@ -141,6 +141,8 @@ Read the **whole ticket, including `description`** (not just the summary; use `j
 
 Determine the root cause from code alone. Clear → skip to Step 5. Inconclusive → Step 4.
 
+**Behavior variants:** When the ticket implies a specific variant of behavior (a region, channel, tenant, rollout flag, or client platform), do not assume the default or most common code path. Identify which code path **actually serves that variant** and trace the root-cause signal (the field or branch) to where that path **actually constructs it**. Consult the repo knowledge base first for known variant→code-path mappings, and treat code comments, names, and docs as **unverified hints, never evidence** — any claim that two paths are equivalent must be confirmed at the construction site.
+
 **Downstream services:** the ticket names the *entry* service, but the defect may live in a **downstream service** it calls (named in a stack trace, API call, or config). That is evidence-driven discovery, not guessing a silent ticket — resolve the downstream repo via `gitlab-cli` and prepare it as in Step 2. **If it cannot be confidently resolved, stop and return `needs-info`.** A change spanning services is **cross-service** — prefer `auto-diagnose` over an autonomous cross-service fix.
 
 ### Step 4 — Query Kibana (only if Step 3 is inconclusive and kibana-cli is configured)
@@ -150,6 +152,8 @@ Search production logs for the error and analyse frequency, stack traces, and ti
 ```bash
 kibana-cli search --index "app-logs-*" --query "<errorKeyword>" --last 24h --service <serviceName> --json
 ```
+
+**Runtime evidence is required, not optional, when** the ticket provides a runtime clue (trace id, error message, log screenshot) or the defect only reproduces in a specific environment. If such evidence is needed but kibana-cli is unavailable or returns nothing, you **must not auto-fix** — downgrade to `auto-diagnose` (state the code-level hypothesis and note that log confirmation is missing) or `needs-info`.
 
 If still inconclusive → apply the Confidence Gate.
 

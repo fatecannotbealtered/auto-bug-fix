@@ -7,6 +7,13 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed
+
+- **Hardened the per-ticket workflow guardrails in all four agent templates** (kiro/cursor/claude-code/codex), driven by a real misfire where an agent shipped a clean-looking but inert fix built on a wrong link model:
+  - Step 3 — **Behavior variants**: when the ticket implies a variant (region, channel, tenant, rollout flag, platform), locate the code path that *actually serves it* and trace the root-cause signal to its construction site; consult the repo knowledge base for variant→path mappings; treat code comments/names/docs as unverified hints, never evidence.
+  - Step 4 — **Runtime evidence gate**: when the ticket gives a runtime clue or only reproduces in a specific environment, runtime evidence is required; if kibana-cli is unavailable or returns nothing, must not `auto-fix` — downgrade to `auto-diagnose`/`needs-info`.
+  - Confidence Gate — **`auto-fix` now requires evidence independent of the code/tests the agent writes** (runtime logs, a reproduction, or a ticket fact); a self-authored test does not count as root-cause evidence.
+
 ## [1.0.2] - 2026-06-01
 
 ### Added
