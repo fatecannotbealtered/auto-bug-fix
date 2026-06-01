@@ -125,8 +125,7 @@ your-agent exec "Fix bug $1 using the auto-bug-fix skill"
 ```json
 {
   "agent":  {
-    "agentType": "codex",
-    "command": "codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check \"Fix bug {issueKey} using the auto-bug-fix skill\""
+    "agentType": "codex"
   },
   "poll": {
     "intervalSeconds": 300,
@@ -148,10 +147,7 @@ your-agent exec "Fix bug $1 using the auto-bug-fix skill"
     "update": true,
     "handoff": true,
     "handoffDir": "handoff"
-  },
-  "jira":   { "host": "https://jira.example.com", "token": "$JIRA_TOKEN" },
-  "gitlab": { "host": "https://gitlab.example.com", "token": "$GITLAB_TOKEN" },
-  "kibana": { "host": "$KIBANA_HOST", "user": "$KIBANA_USER", "password": "$KIBANA_PASSWORD" }
+  }
 }
 ```
 
@@ -160,7 +156,7 @@ your-agent exec "Fix bug $1 using the auto-bug-fix skill"
 
 | 字段 | 默认值 | 说明 |
 |------|--------|------|
-| `agent.command` | **必填** | 每个匹配 issue 启动的命令（不经过 shell）。`{issueKey}` 会被替换，无占位符则追加。 |
+| `agent.command` | 推导/自定义 | 每个匹配 issue 启动的命令（不经过 shell）。已知 `agentType` 时**自动推导**，留空即可；**仅自定义 agent**（`agentType` 留空）才必填。`{issueKey}` 会被替换，无占位符则追加。 |
 | `agent.agentType` | — | setup 选择的模板：`kiro` / `cursor` / `claude-code` / `codex`，自定义留空。 |
 | `poll.intervalSeconds` | `300` | 轮询间隔（秒），`0` 用默认。 |
 | `poll.maxConcurrent` | `3` | 同时运行的 agent 修复数上限，`0` 用默认。 |

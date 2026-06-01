@@ -1,7 +1,6 @@
 {
   "agent": {
-    "agentType": "kiro",
-    "command": "kiro-cli chat --no-interactive --trust-all-tools --agent auto-bug-fix \"Fix bug {issueKey}\""
+    "agentType": "kiro"
   },
   "poll": {
     "intervalSeconds": 300,

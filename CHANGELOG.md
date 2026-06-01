@@ -7,6 +7,10 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Docs
+
+- Aligned docs with the code: removed the stale `jira`/`gitlab`/`kibana` token blocks from the README config examples (those keys are not part of the config schema — credentials live in the sibling CLIs); the config examples now store only `agentType` for a known agent (the command is derived at runtime); clarified that `agent.command` is required only for a custom agent; added `doctor` to the CONTRIBUTING command list.
+
 ### Changed
 
 - **Hardened the per-ticket workflow guardrails in all four agent templates** (kiro/cursor/claude-code/codex), driven by a real misfire where an agent shipped a clean-looking but inert fix built on a wrong link model:

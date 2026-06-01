@@ -21,7 +21,7 @@ go build ./...     # verify it compiles
 main.go                     ← entry point → cmd.Execute()
 go.mod
 cmd/
-  cmd.go                    ← CLI: setup / start / stop / status / fix / version
+  cmd.go                    ← CLI: setup / start / stop / status / doctor / fix / version
 internal/
   config/                   ← config loading + $ENV substitution + validation
   state/                    ← state.json read/write, issue status tracking

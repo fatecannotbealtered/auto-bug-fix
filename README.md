@@ -125,8 +125,7 @@ Config lives at `~/.auto-bug-fix/config.json` (created by `auto-bug-fix setup`).
 ```json
 {
   "agent":  {
-    "agentType": "codex",
-    "command": "codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check \"Fix bug {issueKey} using the auto-bug-fix skill\""
+    "agentType": "codex"
   },
   "poll": {
     "intervalSeconds": 300,
@@ -148,10 +147,7 @@ Config lives at `~/.auto-bug-fix/config.json` (created by `auto-bug-fix setup`).
     "update": true,
     "handoff": true,
     "handoffDir": "handoff"
-  },
-  "jira":   { "host": "https://jira.example.com", "token": "$JIRA_TOKEN" },
-  "gitlab": { "host": "https://gitlab.example.com", "token": "$GITLAB_TOKEN" },
-  "kibana": { "host": "$KIBANA_HOST", "user": "$KIBANA_USER", "password": "$KIBANA_PASSWORD" }
+  }
 }
 ```
 
@@ -160,7 +156,7 @@ Config lives at `~/.auto-bug-fix/config.json` (created by `auto-bug-fix setup`).
 
 | Field | Default | Description |
 |-------|---------|-------------|
-| `agent.command` | **required** | Command spawned (no shell) for each matching issue. `{issueKey}` is substituted, or appended if absent. |
+| `agent.command` | derived / custom | Command spawned (no shell) per matching issue. For a known `agentType` it is **derived automatically** — leave it unset; **required only for a custom agent** (empty `agentType`). `{issueKey}` is substituted, or appended if absent. |
 | `agent.agentType` | — | Template selected by setup: `kiro` / `cursor` / `claude-code` / `codex`, or empty for custom. |
 | `poll.intervalSeconds` | `300` | Polling interval in seconds (`0` → default). |
 | `poll.maxConcurrent` | `3` | Max issues running agent fixes at once (`0` → default). |
