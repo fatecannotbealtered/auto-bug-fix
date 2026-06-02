@@ -61,7 +61,7 @@ gitlab-cli auth login --host https://gitlab.company.com --token <PAT>
 
 # 3. Configure
 auto-bug-fix setup --agent codex   # or: kiro, cursor, claude-code
-# edit the config: fill in hosts, tokens, and poll.filter
+# edit the config: set agent.model (required) and poll.filter
 
 # 4. Verify prerequisites
 auto-bug-fix doctor   # checks config + required CLIs (agent, jira-cli, gitlab-cli, git) on PATH
@@ -92,14 +92,16 @@ auto-bug-fix fix PROJ-123
 
 auto-bug-fix doesn't embed an agent — when a matching issue is found, it spawns one command and lets that agent do the work, using the workflow from the installed `auto-bug-fix` skill.
 
-For a supported `agent.agentType`, that command is **derived automatically** (so it always matches the installed subagent template — no drift on upgrade); you only choose the type via `setup --agent`:
+For a supported `agent.agentType`, that command is **derived automatically** (so it always matches the installed subagent template — no drift on upgrade); you only choose the type via `setup --agent` and pin the model via `agent.model` (**required** for a known type):
 
 | `agentType` | Derived command |
 |-------|-----------------|
 | `kiro` | `kiro-cli chat --no-interactive --trust-all-tools --agent auto-bug-fix "Fix bug {issueKey}"` |
-| `codex` | `codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check "Fix bug {issueKey} using the auto-bug-fix skill"` |
-| `claude-code` | `claude --agent auto-bug-fix -p "Fix bug {issueKey}" --permission-mode acceptEdits` |
-| `cursor` | `cursor-agent --print --force "Fix bug {issueKey} using the auto-bug-fix workflow"` |
+| `codex` | `codex exec --model "<model>" --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check "Fix bug {issueKey} using the auto-bug-fix skill"` |
+| `claude-code` | `claude --model "<model>" --agent auto-bug-fix -p "Fix bug {issueKey}" --permission-mode acceptEdits` |
+| `cursor` | `cursor-agent --model "<model>" --print --force "Fix bug {issueKey} using the auto-bug-fix workflow"` |
+
+**Model (`agent.model`, required for a known type):** the spawned agent should never silently fall back to a CLI default model on an unattended fix. `cursor` / `claude-code` / `codex` accept a `--model` flag, so the model is injected into the derived command and always reflects config. **kiro-cli `chat` has no `--model` flag** — its model lives in the agent JSON (`~/.kiro/agents/auto-bug-fix.json`), so `setup --agent kiro` writes `agent.model` there. After changing `agent.model` for kiro, re-run `auto-bug-fix setup --agent kiro` to apply it.
 
 For any other agent, leave `agentType` empty and set a **custom `agent.command`** yourself (e.g. `/path/to/fix.sh`, key appended as `$1`). If you set both, the explicit command wins and `doctor` warns about the override.
 
@@ -125,7 +127,8 @@ Config lives at `~/.auto-bug-fix/config.json` (created by `auto-bug-fix setup`).
 ```json
 {
   "agent":  {
-    "agentType": "codex"
+    "agentType": "codex",
+    "model": "gpt-5.1-codex"
   },
   "poll": {
     "intervalSeconds": 300,
@@ -158,6 +161,7 @@ Config lives at `~/.auto-bug-fix/config.json` (created by `auto-bug-fix setup`).
 |-------|---------|-------------|
 | `agent.command` | derived / custom | Command spawned (no shell) per matching issue. For a known `agentType` it is **derived automatically** — leave it unset; **required only for a custom agent** (empty `agentType`). `{issueKey}` is substituted, or appended if absent. |
 | `agent.agentType` | — | Template selected by setup: `kiro` / `cursor` / `claude-code` / `codex`, or empty for custom. |
+| `agent.model` | — | **Required for a known `agentType`.** The model the spawned agent must use. Injected as `--model` for `cursor`/`claude-code`/`codex`; written into the kiro agent JSON for `kiro` (re-run `setup --agent kiro` to apply). Not used for a custom agent (put the model in your `agent.command`). |
 | `poll.intervalSeconds` | `300` | Polling interval in seconds (`0` → default). |
 | `poll.maxConcurrent` | `3` | Max issues running agent fixes at once (`0` → default). |
 | `poll.stateExpiryDays` | `0` | Re-trigger `done` / `failed` / `waiting` issues after this many days. `0` = never. |
@@ -216,7 +220,7 @@ The Go binary is a **deterministic scheduler**: configuration, Jira polling, ide
 - **Credentials stay outside the poller** — the agent relies on its own authenticated CLIs; the poller never injects tokens.
 - **Conservative automation** — the agent only writes code and opens an MR when the root cause is clear and locally testable; otherwise it diagnoses or asks on Jira.
 
-**Non-goals (1.0.2):** no GitLab editing or Kibana calls inside the Go binary, no MR-merge or ticket-close automation, no per-agent adapter framework.
+**Non-goals (1.0.3):** no GitLab editing or Kibana calls inside the Go binary, no MR-merge or ticket-close automation, no per-agent adapter framework.
 
 ---
 

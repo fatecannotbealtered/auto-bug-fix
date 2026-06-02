@@ -161,7 +161,7 @@ func commandDriftCheck(a config.AgentConfig) (Check, bool) {
 	if !config.KnownAgentType(a.AgentType) {
 		return Check{}, false
 	}
-	if a.Command != "" && a.Command != installer.AgentCommand(a.AgentType) {
+	if a.Command != "" && a.Command != installer.AgentCommand(a.AgentType, a.Model) {
 		return Check{"agent command", Warn, "explicit agent.command overrides the command derived from agentType=" + a.AgentType + "; remove it to always match the installed subagent"}, true
 	}
 	return Check{}, false

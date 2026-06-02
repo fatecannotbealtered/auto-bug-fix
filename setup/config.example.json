@@ -1,6 +1,7 @@
 {
   "agent": {
-    "agentType": "kiro"
+    "agentType": "kiro",
+    "model": "claude-sonnet-4"
   },
   "poll": {
     "intervalSeconds": 300,

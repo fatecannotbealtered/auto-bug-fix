@@ -20,7 +20,12 @@ type Config struct {
 
 type AgentConfig struct {
 	Command   string `json:"command"`
-	AgentType string `json:"agentType"` // "kiro" | "cursor" | "" (custom)
+	AgentType string `json:"agentType"` // "kiro" | "cursor" | "claude-code" | "codex" | "" (custom)
+	// Model is the model the spawned agent must use. Required for a known
+	// agentType. For flag-capable agents (cursor/claude-code/codex) it is
+	// injected as --model in the derived command; for kiro (no --model flag) it
+	// is written into the agent JSON by `setup --agent kiro`.
+	Model string `json:"model"`
 }
 
 type PollConfig struct {
@@ -146,6 +151,7 @@ func substituteEnv(s string, missing map[string]struct{}) string {
 func substituteEnvInConfig(cfg *Config) []string {
 	missing := map[string]struct{}{}
 	cfg.Agent.Command = substituteEnv(cfg.Agent.Command, missing)
+	cfg.Agent.Model = substituteEnv(cfg.Agent.Model, missing)
 	cfg.Poll.Filter.TitleContains = substituteEnv(cfg.Poll.Filter.TitleContains, missing)
 	cfg.Workspace.Root = substituteEnv(cfg.Workspace.Root, missing)
 	cfg.Workspace.Cleanup = substituteEnv(cfg.Workspace.Cleanup, missing)
@@ -242,6 +248,11 @@ func Validate(cfg Config) error {
 	}
 	if cfg.Agent.AgentType != "" && !KnownAgentType(cfg.Agent.AgentType) {
 		return fmt.Errorf("agent.agentType must be \"kiro\", \"cursor\", \"claude-code\", \"codex\", or empty")
+	}
+	// A known agentType must pin its model: the spawned agent should not silently
+	// fall back to each CLI's default model on an unattended fix.
+	if KnownAgentType(cfg.Agent.AgentType) && strings.TrimSpace(cfg.Agent.Model) == "" {
+		return fmt.Errorf("agent.model is required for agentType %q — specify the model the agent must use", cfg.Agent.AgentType)
 	}
 	if cfg.Poll.IntervalSeconds < 0 {
 		return fmt.Errorf("poll.intervalSeconds must be >= 0")

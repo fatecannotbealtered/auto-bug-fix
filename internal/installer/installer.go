@@ -42,7 +42,7 @@ func ArtifactPaths(agentType, home string) []string {
 // directory). The execution workflow lives in that prompt file — owned by the
 // spawned subagent — leaving the skills/ directory for the operator skill
 // (installed separately via `npx skills add`).
-func InstallKiro(home string) error {
+func InstallKiro(home, model string) error {
 	agentJSON, err := readAgentFile("kiro", "auto-bug-fix.json")
 	if err != nil {
 		return err
@@ -58,6 +58,10 @@ func InstallKiro(home string) error {
 	}
 	agent["prompt"] = "file://./auto-bug-fix.md"
 	delete(agent, "resources")
+	// kiro pins the model via the agent JSON (no CLI --model flag).
+	if m := strings.TrimSpace(model); m != "" {
+		agent["model"] = m
+	}
 
 	out, err := json.MarshalIndent(agent, "", "  ")
 	if err != nil {
@@ -151,18 +155,32 @@ func InstallCodex(home string) error {
 	return nil
 }
 
-// AgentCommand returns the correct non-interactive command for the given agentType.
-func AgentCommand(agentType string) string {
+// AgentCommand returns the correct non-interactive command for the given
+// agentType, pinning model when set. Flag syntax per each CLI's official docs:
+// cursor-agent/claude/codex all accept `--model <name>`; kiro-cli chat has NO
+// --model flag (its model lives in the agent JSON — see InstallKiro), so the
+// kiro command is identical regardless of model.
+func AgentCommand(agentType, model string) string {
 	switch agentType {
 	case "kiro":
 		return `kiro-cli chat --no-interactive --trust-all-tools --agent auto-bug-fix "Fix bug {issueKey}"`
 	case "cursor":
-		return `cursor-agent --print --force "Fix bug {issueKey} using the auto-bug-fix workflow"`
+		return `cursor-agent` + modelFlag(model) + ` --print --force "Fix bug {issueKey} using the auto-bug-fix workflow"`
 	case "claude-code":
-		return `claude --agent auto-bug-fix -p "Fix bug {issueKey}" --permission-mode acceptEdits`
+		return `claude` + modelFlag(model) + ` --agent auto-bug-fix -p "Fix bug {issueKey}" --permission-mode acceptEdits`
 	case "codex":
-		return `codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check "Fix bug {issueKey} using the auto-bug-fix skill"`
+		return `codex exec` + modelFlag(model) + ` --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check "Fix bug {issueKey} using the auto-bug-fix skill"`
 	default:
 		return ""
 	}
+}
+
+// modelFlag renders ` --model "<model>"` (quoted, so a model name with spaces
+// survives the no-shell tokenizer) or "" when no model is pinned.
+func modelFlag(model string) string {
+	m := strings.TrimSpace(model)
+	if m == "" {
+		return ""
+	}
+	return ` --model "` + m + `"`
 }

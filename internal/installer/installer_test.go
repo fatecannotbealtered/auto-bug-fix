@@ -23,7 +23,7 @@ func TestInstallKiro_CreatesFiles(t *testing.T) {
 	useTempWorkingDir(t)
 	home := t.TempDir()
 
-	if err := installer.InstallKiro(home); err != nil {
+	if err := installer.InstallKiro(home, "claude-sonnet-4"); err != nil {
 		t.Fatal(err)
 	}
 	b, err := os.ReadFile(filepath.Join(home, ".kiro", "agents", "auto-bug-fix.json"))
@@ -33,6 +33,9 @@ func TestInstallKiro_CreatesFiles(t *testing.T) {
 	var agent map[string]any
 	if err := json.Unmarshal(b, &agent); err != nil {
 		t.Fatalf("agent JSON invalid: %v", err)
+	}
+	if m, _ := agent["model"].(string); m != "claude-sonnet-4" {
+		t.Errorf("kiro agent should pin the model in JSON, got %q", m)
 	}
 	if p, _ := agent["prompt"].(string); p != "file://./auto-bug-fix.md" {
 		t.Errorf("agent prompt should reference the prompt file, got %q", p)
@@ -57,7 +60,7 @@ func TestInstallKiro_CreatesFiles(t *testing.T) {
 func TestArtifactPaths_MatchInstallers(t *testing.T) {
 	useTempWorkingDir(t)
 	cases := map[string]func(string) error{
-		"kiro":        installer.InstallKiro,
+		"kiro":        func(h string) error { return installer.InstallKiro(h, "") },
 		"cursor":      installer.InstallCursor,
 		"claude-code": installer.InstallClaudeCode,
 		"codex":       installer.InstallCodex,
@@ -75,7 +78,7 @@ func TestArtifactPaths_MatchInstallers(t *testing.T) {
 			if !config.KnownAgentType(agentType) {
 				t.Errorf("config.KnownAgentType(%q) is false but installer supports it", agentType)
 			}
-			if installer.AgentCommand(agentType) == "" {
+			if installer.AgentCommand(agentType, "") == "" {
 				t.Errorf("AgentCommand(%q) is empty but installer supports it", agentType)
 			}
 			for _, p := range paths {
@@ -154,14 +157,24 @@ func TestInstallCodex_IdempotentReplace(t *testing.T) {
 func TestAgentCommand(t *testing.T) {
 	cases := map[string]string{
 		"kiro":        "kiro-cli",
-		"cursor":      "cursor-agent --print --force",
+		"cursor":      "cursor-agent",
 		"claude-code": "claude",
-		"codex":       "codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check",
+		"codex":       "codex exec",
 	}
 	for agentType, want := range cases {
-		cmd := installer.AgentCommand(agentType)
+		cmd := installer.AgentCommand(agentType, "")
 		if !strings.Contains(cmd, want) {
 			t.Errorf("agentType %q: command should contain %q, got %q", agentType, want, cmd)
 		}
+	}
+
+	// Flag-capable agents inject --model; kiro pins its model in JSON instead.
+	for _, agentType := range []string{"cursor", "claude-code", "codex"} {
+		if cmd := installer.AgentCommand(agentType, "my-model"); !strings.Contains(cmd, `--model "my-model"`) {
+			t.Errorf("agentType %q should inject the model flag, got %q", agentType, cmd)
+		}
+	}
+	if cmd := installer.AgentCommand("kiro", "my-model"); strings.Contains(cmd, "--model") {
+		t.Errorf("kiro has no --model flag; model belongs in the agent JSON, got %q", cmd)
 	}
 }

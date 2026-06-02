@@ -7,6 +7,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [1.0.3] - 2026-06-02
+
+### Added
+
+- **`agent.model` — required model pinning per agent.** A known `agentType` must now specify `agent.model` (validation fails otherwise), so an unattended fix never silently falls back to a CLI's default model. The model is applied per the agent's own mechanism — no forced uniformity: `cursor` / `claude-code` / `codex` accept a `--model` flag, so it is injected into the derived command and always tracks config; **kiro-cli `chat` has no `--model` flag**, so the model is written into the kiro agent JSON (`~/.kiro/agents/auto-bug-fix.json`) by `setup --agent kiro` (re-run it after changing `agent.model` for kiro). Flag syntax verified against each CLI's official docs. Custom agents (empty `agentType`) are unaffected — put the model in your `agent.command`.
+
 ### Docs
 
 - Aligned docs with the code: removed the stale `jira`/`gitlab`/`kibana` token blocks from the README config examples (those keys are not part of the config schema — credentials live in the sibling CLIs); the config examples now store only `agentType` for a known agent (the command is derived at runtime); clarified that `agent.command` is required only for a custom agent; added `doctor` to the CONTRIBUTING command list.

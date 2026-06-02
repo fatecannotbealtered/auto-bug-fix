@@ -197,8 +197,19 @@ func TestValidate_KnownAgentTypeAllowsEmptyCommand(t *testing.T) {
 	cfg := validConfig()
 	cfg.Agent.Command = ""
 	cfg.Agent.AgentType = "kiro"
+	cfg.Agent.Model = "claude-sonnet-4"
 	if err := config.Validate(cfg); err != nil {
 		t.Fatalf("known agentType with empty command must be valid: %v", err)
+	}
+}
+
+func TestValidate_KnownAgentTypeRequiresModel(t *testing.T) {
+	cfg := validConfig()
+	cfg.Agent.Command = ""
+	cfg.Agent.AgentType = "kiro"
+	cfg.Agent.Model = ""
+	if err := config.Validate(cfg); err == nil {
+		t.Fatal("a known agentType with no model must fail validation")
 	}
 }
 
@@ -276,6 +287,9 @@ func TestValidate_AgentType(t *testing.T) {
 	for _, valid := range []string{"kiro", "cursor", "claude-code", "codex", ""} {
 		cfg := validConfig()
 		cfg.Agent.AgentType = valid
+		if valid != "" {
+			cfg.Agent.Model = "some-model"
+		}
 		if err := config.Validate(cfg); err != nil {
 			t.Fatalf("agentType %q should be valid: %v", valid, err)
 		}

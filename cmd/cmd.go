@@ -25,7 +25,7 @@ import (
 )
 
 // version is overridden at release time via -ldflags "-X .../cmd.version=<tag>".
-var version = "1.0.2"
+var version = "1.0.3"
 
 func defaultConfigPath() string {
 	home, _ := os.UserHomeDir()
@@ -119,14 +119,20 @@ func runSetup(args []string) {
 	if _, err := os.Stat(*cfgPath); err == nil {
 		fmt.Printf("Config already exists at %s\n", *cfgPath)
 		if *agentType != "" {
-			installAgentTemplate(*agentType)
+			// Re-running setup propagates the current config's model into the
+			// kiro agent JSON (kiro pins its model there, not via a CLI flag).
+			model := ""
+			if existing, lerr := config.Load(*cfgPath); lerr == nil {
+				model = existing.Agent.Model
+			}
+			installAgentTemplate(*agentType, model)
 		}
 		fmt.Println("Edit it directly or delete it and run setup again.")
 		return
 	}
 
 	if *agentType != "" {
-		installAgentTemplate(*agentType)
+		installAgentTemplate(*agentType, "")
 	}
 
 	// Write config with agentType and auto-filled command
@@ -143,8 +149,11 @@ func runSetup(args []string) {
 	if *agentType == "" {
 		fmt.Println("Next: fill in agent.command (custom agent) and poll.filter, then authenticate jira-cli and gitlab-cli (`jira-cli login`, `gitlab-cli auth login`) and run `auto-bug-fix doctor`.")
 	} else {
-		fmt.Println("Next: set poll.filter, then authenticate jira-cli and gitlab-cli (`jira-cli login`, `gitlab-cli auth login`) and run `auto-bug-fix doctor`.")
-		fmt.Printf("Launch command is derived from agentType=%s at runtime: %s\n", *agentType, installer.AgentCommand(*agentType))
+		fmt.Println("Next: set agent.model (required) and poll.filter, then authenticate jira-cli and gitlab-cli (`jira-cli login`, `gitlab-cli auth login`) and run `auto-bug-fix doctor`.")
+		fmt.Printf("Launch command is derived from agentType=%s at runtime: %s\n", *agentType, installer.AgentCommand(*agentType, ""))
+		if *agentType == "kiro" {
+			fmt.Println("Note: kiro pins its model in the agent JSON — re-run `auto-bug-fix setup --agent kiro` after setting agent.model to apply it.")
+		}
 	}
 }
 
@@ -157,12 +166,12 @@ func validSetupAgentType(agentType string) bool {
 	}
 }
 
-func installAgentTemplate(agentType string) {
+func installAgentTemplate(agentType, model string) {
 	home, _ := os.UserHomeDir()
 
 	switch agentType {
 	case "kiro":
-		if err := installer.InstallKiro(home); err != nil {
+		if err := installer.InstallKiro(home, model); err != nil {
 			log.Fatalf("setup: install kiro agent: %v", err)
 		}
 		fmt.Println("Kiro agent configured at ~/.kiro/agents/auto-bug-fix.json (prompt: auto-bug-fix.md)")
@@ -191,6 +200,9 @@ func defaultConfig(agentType string) map[string]any {
 	agent := map[string]any{"agentType": agentType}
 	if !config.KnownAgentType(agentType) {
 		agent["command"] = ""
+	} else {
+		// Required for a known agentType — surfaced empty for the user to fill.
+		agent["model"] = ""
 	}
 	return map[string]any{
 		"agent": agent,
@@ -456,7 +468,7 @@ func templateProbe(agentType string) ([]string, bool) {
 // hatch) is left untouched.
 func resolveAgentCommand(cfg *config.Config) {
 	if strings.TrimSpace(cfg.Agent.Command) == "" {
-		cfg.Agent.Command = installer.AgentCommand(cfg.Agent.AgentType)
+		cfg.Agent.Command = installer.AgentCommand(cfg.Agent.AgentType, cfg.Agent.Model)
 	}
 }
 

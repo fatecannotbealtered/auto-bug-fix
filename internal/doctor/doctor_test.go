@@ -189,7 +189,7 @@ func TestRun_CommandDriftWarns(t *testing.T) {
 }
 
 func TestRun_DerivedCommandNoDrift(t *testing.T) {
-	cfg := cfgWith(installer.AgentCommand("kiro"), "kiro")
+	cfg := cfgWith(installer.AgentCommand("kiro", ""), "kiro")
 	checks := Run(cfg, nil, lookFake(allPresent()), probeFake(allAuthed()), tmplInstalled)
 	if got := levelOf(checks, "agent command"); got != -1 {
 		t.Errorf("derived command should add no drift check, got level %v", got)

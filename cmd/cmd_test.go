@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/fatecannotbealtered/auto-bug-fix/internal/config"
@@ -22,8 +23,16 @@ func TestHasFlag(t *testing.T) {
 func TestResolveAgentCommand_DerivesForKnownType(t *testing.T) {
 	cfg := config.Config{Agent: config.AgentConfig{AgentType: "kiro"}}
 	resolveAgentCommand(&cfg)
-	if cfg.Agent.Command != installer.AgentCommand("kiro") {
+	if cfg.Agent.Command != installer.AgentCommand("kiro", "") {
 		t.Errorf("expected derived command, got %q", cfg.Agent.Command)
+	}
+}
+
+func TestResolveAgentCommand_InjectsModelForFlagAgent(t *testing.T) {
+	cfg := config.Config{Agent: config.AgentConfig{AgentType: "cursor", Model: "sonnet-4.5"}}
+	resolveAgentCommand(&cfg)
+	if !strings.Contains(cfg.Agent.Command, `--model "sonnet-4.5"`) {
+		t.Errorf("expected model flag in derived command, got %q", cfg.Agent.Command)
 	}
 }
 
