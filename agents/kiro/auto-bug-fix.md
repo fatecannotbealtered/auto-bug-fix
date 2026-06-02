@@ -75,6 +75,12 @@ Write in **business language**, not technical jargon. The audience is product ma
 
 ## Confidence Gate and Result Types
 
+These root-cause principles apply on **every** path — including when the cause looks clear from code alone, not only after a Kibana query:
+
+**An empty, missing, or silent result is a symptom, not a root cause.** When a trace or reproduction shows no output where output was expected, go to where that result is produced and find the exact condition that makes it empty — do not paper over it with a generic fallback. If the deciding signal (the status, reason, or marker that explains the emptiness) is **not present in the code or the logs**, that is an observability gap: the correct autonomous deliverable is to **make it observable first** — add logging that records the full result of the upstream call (status, reason/marker, identifiers) — and `auto-diagnose`, rather than shipping handling for a cause you never observed.
+
+**External contracts are confirmed, not inferred.** When behavior depends on a value an external dependency returns (another service, model, API, or library) whose meaning is not explicit in the code or logs, you cannot settle it autonomously. `auto-diagnose`/`needs-info` and record the concrete next step — carry the upstream's own trace/response identifier to the owning team or its documentation and confirm the contract — instead of inventing a handler. Once that signal is confirmed, handle **that specific signal** and reuse the codebase's existing handling for the analogous case.
+
 After root-cause analysis (Steps 3–4), choose exactly one result type before writing any code:
 
 - **auto-fix** — root cause is clear **and backed by at least one piece of evidence independent of the code and tests you are about to write** (runtime logs, a reproduction, or a fact stated in the ticket); a test you author does **not** count as root-cause evidence — it only proves the implementation matches your assumption. The change is localized to one service and a test can verify it. If the root cause rests mainly on reading code plus comment inference, with no runtime confirmation, and spans multiple branches or environments → use `auto-diagnose` instead. Proceed with code, tests, MR, and Jira update.
@@ -153,10 +159,6 @@ kibana-cli search --index "app-logs-*" --query "<errorKeyword>" --last 24h --ser
 ```
 
 **Runtime evidence is required, not optional, when** the ticket provides a runtime clue (trace id, error message, log screenshot) or the defect only reproduces in a specific environment. If such evidence is needed but kibana-cli is unavailable or returns nothing, you **must not auto-fix** — downgrade to `auto-diagnose` (state the code-level hypothesis and note that log confirmation is missing) or `needs-info`.
-
-**An empty, missing, or silent result is a symptom, not a root cause.** When a trace or reproduction shows no output where output was expected, go to where that result is produced and find the exact condition that makes it empty — do not paper over it with a generic fallback. If the deciding signal (the status, reason, or marker that explains the emptiness) is **not present in the code or the logs**, that is an observability gap: the correct autonomous deliverable is to **make it observable first** — add logging that records the full result of the upstream call (status, reason/marker, identifiers) — and `auto-diagnose`, rather than shipping handling for a cause you never observed.
-
-**External contracts are confirmed, not inferred.** When behavior depends on a value an external dependency returns (another service, model, API, or library) whose meaning is not explicit in the code or logs, you cannot settle it autonomously. `auto-diagnose`/`needs-info` and record the concrete next step — carry the upstream's own trace/response identifier to the owning team or its documentation and confirm the contract — instead of inventing a handler. Once that signal is confirmed, handle **that specific signal** and reuse the codebase's existing handling for the analogous case.
 
 If still inconclusive → apply the Confidence Gate.
 

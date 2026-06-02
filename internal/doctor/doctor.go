@@ -138,7 +138,11 @@ func agentSkillsCheck(skills SkillProbe, agentType string) Check {
 		return Check{"cli skills", Fail, "missing required skill(s) " + strings.Join(missingReq, ", ") + " in " + dir + " — " + hint}
 	}
 	if len(missingOpt) > 0 {
-		return Check{"cli skills", Warn, "optional skill(s) missing from " + dir + ": " + strings.Join(missingOpt, ", ")}
+		detail := "optional skill(s) missing from " + dir + ": " + strings.Join(missingOpt, ", ")
+		if flag := installer.SkillsAgentFlag(agentType); flag != "" {
+			detail += " — install with `npx skills add fatecannotbealtered/<skill> -g -a " + flag + " -y` if the workflow needs Kibana log analysis"
+		}
+		return Check{"cli skills", Warn, detail}
 	}
 	return Check{"cli skills", OK, "jira-cli, gitlab-cli, kibana-cli installed in " + dir}
 }

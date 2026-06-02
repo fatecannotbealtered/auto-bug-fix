@@ -24,12 +24,11 @@ type CLISkill struct {
 }
 
 // CLISkills is the single source of truth for which CLI skills setup injects and
-// doctor verifies, so injection and the preflight check cannot drift apart. All
-// three are required: an unattended fix must never guess a CLI's flags.
+// doctor verifies, so injection and the preflight check cannot drift apart.
 var CLISkills = []CLISkill{
 	{"jira-cli", true},
 	{"gitlab-cli", true},
-	{"kibana-cli", true},
+	{"kibana-cli", false},
 }
 
 // SkillsAgentFlag maps our agentType to the `--agent` identifier used by the
