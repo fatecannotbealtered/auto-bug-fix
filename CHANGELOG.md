@@ -7,6 +7,20 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [1.0.5] - 2026-06-02
+
+### Added
+
+- **CLI skills are injected into the spawned agent and enforced by `doctor`.** `setup` now wires the `jira-cli`/`gitlab-cli`/`kibana-cli` skills into the executor per each tool's native mechanism — kiro via `resources` (`skill://` to its own `~/.kiro/skills`), claude-code via the subagent `skills:` frontmatter, codex/cursor via a Tools-section reference — so the agent uses the correct CLI commands instead of guessing flags. `doctor` verifies the required skills (`jira-cli`/`gitlab-cli`) are present in the agent's **own** skill directory and fails preflight if missing (kibana-cli is optional → WARN), with an actionable `npx skills add fatecannotbealtered/<skill> -g -a <agent> -y` hint.
+
+### Changed
+
+- **General root-cause principles now apply on every path.** The empty-result/observability-gap/external-contract principles were moved out of the Kibana-only Step 4 into the Confidence Gate, so they govern the auto-fix decision even when the cause looks clear from code alone (all four templates).
+
+### Fixed
+
+- **codex Setup Mode** no longer lists `jira.host`/`gitlab.host` config fields that are not part of the schema (authentication lives in the sibling CLIs).
+
 ## [1.0.4] - 2026-06-02
 
 ### Fixed
