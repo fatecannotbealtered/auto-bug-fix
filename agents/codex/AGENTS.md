@@ -196,11 +196,15 @@ kibana-cli search --index "app-logs-*" --query "<errorKeyword>" --last 24h --ser
 
 **Runtime evidence is required, not optional, when** the ticket provides a runtime clue (trace id, error message, log screenshot) or the defect only reproduces in a specific environment. If such evidence is needed but kibana-cli is unavailable or returns nothing, you **must not auto-fix** — downgrade to `auto-diagnose` (state the code-level hypothesis and note that log confirmation is missing) or `needs-info`.
 
+**An empty, missing, or silent result is a symptom, not a root cause.** When a trace or reproduction shows no output where output was expected, go to where that result is produced and find the exact condition that makes it empty — do not paper over it with a generic fallback. If the deciding signal (the status, reason, or marker that explains the emptiness) is **not present in the code or the logs**, that is an observability gap: the correct autonomous deliverable is to **make it observable first** — add logging that records the full result of the upstream call (status, reason/marker, identifiers) — and `auto-diagnose`, rather than shipping handling for a cause you never observed.
+
+**External contracts are confirmed, not inferred.** When behavior depends on a value an external dependency returns (another service, model, API, or library) whose meaning is not explicit in the code or logs, you cannot settle it autonomously. `auto-diagnose`/`needs-info` and record the concrete next step — carry the upstream's own trace/response identifier to the owning team or its documentation and confirm the contract — instead of inventing a handler. Once that signal is confirmed, handle **that specific signal** and reuse the codebase's existing handling for the analogous case.
+
 If still inconclusive → apply the Confidence Gate.
 
 ### Step 5 — Write the minimal fix
 
-A surgical change to the **single root cause** — change only what it requires. Do not refactor unrelated code, and **do not add redundant or speculative fallback paths** (e.g. routing the same case through a second mechanism). If the same fix is genuinely needed on another code path, apply the **same** change there — do not introduce a different mechanism. Do not commit yet.
+A surgical change to the **single root cause** — change only what it requires. Do not refactor unrelated code, and **do not add redundant or speculative fallback paths** (e.g. routing the same case through a second mechanism); **never funnel an entire class of outcomes (e.g. every empty or error result) through one catch-all branch — that masks distinct causes.** If the same fix is genuinely needed on another code path, apply the **same** change there — do not introduce a different mechanism. Do not commit yet.
 
 ### Step 6 — Reproduce and verify with tests
 

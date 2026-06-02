@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -167,6 +168,69 @@ func exitCode(err error) int {
 	return -1
 }
 
+var markerPrefixBytes = []byte(ResultMarkerPrefix)
+
+// markerScanner watches the live output stream for the agent's completion marker
+// and invokes onMarker once when a line beginning with it is seen. Detection is
+// incremental (newline-delimited, prefix compare), so it adds negligible cost
+// over the byte copy os/exec already performs. It is written concurrently from
+// the stdout and stderr copy goroutines, so all state is mutex-guarded.
+type markerScanner struct {
+	mu       sync.Mutex
+	pending  []byte
+	seen     bool
+	onMarker func()
+}
+
+func (s *markerScanner) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	trigger := false
+	if !s.seen {
+		s.pending = append(s.pending, p...)
+		for {
+			i := bytes.IndexByte(s.pending, '\n')
+			if i < 0 {
+				break
+			}
+			line := bytes.TrimSpace(s.pending[:i])
+			s.pending = s.pending[i+1:]
+			// Match a real terminal marker only. The templates document the marker
+			// with `<...>` placeholders (e.g. mr=<MR_URL>); a verbose agent that
+			// echoes that example must not trigger a premature kill. Real markers
+			// carry concrete URLs/paths and never contain angle-bracket placeholders.
+			if bytes.HasPrefix(line, markerPrefixBytes) && !bytes.Contains(line, []byte("<")) {
+				s.seen, trigger = true, true
+				break
+			}
+		}
+		// Bound the partial-line buffer so a long line with no newline can't grow it unbounded.
+		if !s.seen && len(s.pending) > 64*1024 {
+			s.pending = s.pending[len(s.pending)-64*1024:]
+		}
+	}
+	cb := s.onMarker
+	s.mu.Unlock()
+	if trigger && cb != nil {
+		cb()
+	}
+	return len(p), nil
+}
+
+func (s *markerScanner) found() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.seen
+}
+
+// killAgentProcess terminates the spawned agent. Killing the direct child makes
+// cmd.Wait's process-exit condition true; WaitDelay then force-closes the pipe
+// if a detached build daemon still holds it, so Trigger returns promptly.
+func killAgentProcess(cmd *exec.Cmd) {
+	if cmd.Process != nil {
+		_ = cmd.Process.Kill()
+	}
+}
+
 // Trigger spawns the agent command for the given issueKey (shell:false).
 func Trigger(issueKey, command string, options ...Options) (Result, error) {
 	args, err := BuildArgs(command, issueKey)
@@ -183,13 +247,19 @@ func Trigger(issueKey, command string, options ...Options) (Result, error) {
 			cmd.Env = append(cmd.Env, key+"="+value)
 		}
 	}
-	cmd.Stdout = io.MultiWriter(os.Stdout, output)
-	cmd.Stderr = io.MultiWriter(os.Stderr, output)
-	// The agent may spawn long-lived grandchildren (e.g. the Gradle daemon) that
-	// inherit our stdout/stderr pipe. Once the agent itself exits, force-close the
-	// leftover pipe after a short delay so Wait returns instead of blocking forever
-	// on the daemon's open write end. WaitDelay only fires AFTER the agent exits and
-	// (with no Cancel/Context set) never kills the agent or the daemon.
+	// Watch the live stream for the agent's completion marker. The agent prints it
+	// as its final line, after which the MR/comment are already persisted remotely.
+	// Some agents then leave the direct child alive — e.g. blocked on a detached
+	// build daemon that inherited our stdout pipe — which would hang cmd.Wait
+	// indefinitely. On the marker we kill the child so Wait returns instead of
+	// waiting for a graceful exit that never comes.
+	var killOnce sync.Once
+	watcher := &markerScanner{onMarker: func() { killOnce.Do(func() { killAgentProcess(cmd) }) }}
+	cmd.Stdout = io.MultiWriter(os.Stdout, output, watcher)
+	cmd.Stderr = io.MultiWriter(os.Stderr, output, watcher)
+	// A detached grandchild may still hold the pipe after the child exits; once the
+	// child has exited, WaitDelay force-closes the leftover pipe so Wait returns
+	// instead of blocking forever on the daemon's open write end.
 	cmd.WaitDelay = 10 * time.Second
 	if len(options) > 0 && options[0].WaitDelay > 0 {
 		cmd.WaitDelay = options[0].WaitDelay
@@ -199,6 +269,12 @@ func Trigger(issueKey, command string, options ...Options) (Result, error) {
 
 	result := ParseResultMarker(output.String())
 	result.ExitCode = exitCode(err)
+	// If we saw the completion marker, the agent finished successfully; a non-zero
+	// exit caused by our own marker-triggered kill must not be reported as failure.
+	if watcher.found() {
+		err = nil
+		result.ExitCode = 0
+	}
 	result.StartedAt = startedAt
 	result.CompletedAt = completedAt
 	result.DurationMillis = completedAt.Sub(startedAt).Milliseconds()

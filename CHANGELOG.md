@@ -7,6 +7,20 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [1.0.4] - 2026-06-02
+
+### Fixed
+
+- **The poller/`fix` no longer hangs after a fix completes.** A spawned agent could finish its work (printing the `AUTO_BUG_FIX_RESULT` marker, after which the MR/comment are already persisted) yet leave the direct child alive — e.g. blocked on a detached build daemon (Gradle) that inherited the stdout pipe — so `agent.Trigger`'s `cmd.Wait` blocked indefinitely (the existing `WaitDelay` only fires *after* the child exits, which never happened). Trigger now watches the live output stream and, on the completion marker, kills the spawned process so it returns promptly; a marker-triggered kill is reported as success. Detection is incremental (newline-delimited, prefix compare) and ignores the documented `<...>` placeholder example lines so a verbose agent echoing the template can't cause a premature kill. Agent-agnostic — works for kiro/cursor/claude-code/codex via the shared marker contract.
+
+### Changed
+
+- **Hardened the agent-template guardrails with evidence/observability principles** (all four templates, guarded by new invariants):
+  - An empty, missing, or silent result is a **symptom, not a root cause** — find the condition that produces it; never paper over it with a generic fallback.
+  - When the deciding signal is **not in the code or logs**, that is an observability gap: **make it observable first** (log the full upstream result — status, reason/marker, identifiers) and `auto-diagnose`, instead of shipping handling for a cause never observed.
+  - **External contracts are confirmed, not inferred** — carry the upstream's own trace/response id to the owning team or its docs and confirm the contract; otherwise `auto-diagnose`/`needs-info`.
+  - **Never funnel an entire class of outcomes through one catch-all branch** — that masks distinct causes; handle the specific confirmed signal and reuse the codebase's existing analogous handling.
+
 ## [1.0.3] - 2026-06-02
 
 ### Added

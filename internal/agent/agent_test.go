@@ -109,6 +109,14 @@ func TestParseResultMarker(t *testing.T) {
 // TestHelperProcess is re-executed as the spawned "agent" (and its grandchild)
 // to reproduce a long-lived grandchild holding the inherited stdout pipe.
 func TestHelperProcess(t *testing.T) {
+	if os.Getenv("ABF_HELPER") == "marker_then_hang" {
+		// Print the completion marker, then block without exiting — mimicking an
+		// agent (e.g. kiro) that finished its work but stays alive (blocked on a
+		// build daemon). Trigger must detect the marker and kill us.
+		fmt.Println("AUTO_BUG_FIX_RESULT outcome=auto-fix")
+		time.Sleep(60 * time.Second)
+		os.Exit(0)
+	}
 	if os.Getenv("ABF_HELPER") != "marker_then_orphan" {
 		return
 	}
@@ -127,6 +135,35 @@ func TestHelperProcess(t *testing.T) {
 	gc.Stderr = os.Stderr
 	_ = gc.Start()
 	os.Exit(0)
+}
+
+// TestTrigger_KillsHungAgentOnMarker guards the marker-triggered kill: when the
+// agent prints the completion marker but does NOT exit (stays alive), Trigger
+// must detect the marker, kill the child, and return promptly as a success.
+func TestTrigger_KillsHungAgentOnMarker(t *testing.T) {
+	cmd := os.Args[0] + ` -test.run=^TestHelperProcess$`
+	opts := agent.Options{
+		Env:       map[string]string{"ABF_HELPER": "marker_then_hang"},
+		WaitDelay: 500 * time.Millisecond,
+	}
+
+	done := make(chan agent.Result, 1)
+	go func() {
+		result, _ := agent.Trigger("PROJ-1", cmd, opts)
+		done <- result
+	}()
+
+	select {
+	case result := <-done:
+		if result.Outcome != "auto-fix" {
+			t.Fatalf("outcome: got %q, want auto-fix", result.Outcome)
+		}
+		if result.ExitCode != 0 {
+			t.Fatalf("a marker-triggered kill must report success, got exit code %d", result.ExitCode)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Trigger hung: marker seen but the still-running agent was not killed")
+	}
 }
 
 // TestTrigger_DoesNotHangOnOrphanPipe guards the WaitDelay fix: when the agent
