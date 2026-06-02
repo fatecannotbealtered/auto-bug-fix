@@ -40,8 +40,17 @@ func TestInstallKiro_CreatesFiles(t *testing.T) {
 	if p, _ := agent["prompt"].(string); p != "file://./auto-bug-fix.md" {
 		t.Errorf("agent prompt should reference the prompt file, got %q", p)
 	}
-	if _, ok := agent["resources"]; ok {
-		t.Error("standard kiro agent must own its prompt, not borrow a skill resource")
+	if _, ok := agent["resources"]; !ok {
+		t.Fatal("kiro agent must inject the CLI skills as resources")
+	}
+	resJSON, _ := json.Marshal(agent["resources"])
+	for _, s := range []string{"jira-cli", "gitlab-cli", "kibana-cli"} {
+		if !strings.Contains(string(resJSON), "/.kiro/skills/"+s+"/SKILL.md") {
+			t.Errorf("kiro resources should reference the %s skill, got %s", s, resJSON)
+		}
+	}
+	if !strings.Contains(string(resJSON), "skill://") {
+		t.Errorf("kiro CLI skills must use the skill:// scheme, got %s", resJSON)
 	}
 	md, err := os.ReadFile(filepath.Join(home, ".kiro", "agents", "auto-bug-fix.md"))
 	if err != nil {

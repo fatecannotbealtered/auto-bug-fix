@@ -2,6 +2,10 @@
 name: auto-bug-fix
 description: Non-interactive bug-fix execution agent for Jira + GitLab. Use after the external launch flow has selected a Jira issue key.
 permissionMode: acceptEdits
+skills:
+  - jira-cli
+  - gitlab-cli
+  - kibana-cli
 ---
 
 # auto-bug-fix

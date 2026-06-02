@@ -14,6 +14,76 @@ func readAgentFile(agentType, filename string) (string, error) {
 	return agents.ReadFile(agentType, filename)
 }
 
+// CLISkill is a sibling-CLI skill the spawned agent must be able to load before
+// driving that CLI. Required mirrors doctor's capability requiredness: the
+// jira-cli/gitlab-cli skills are mandatory; the kibana-cli skill is optional
+// (the workflow only consults Kibana when code-level analysis is inconclusive).
+type CLISkill struct {
+	Name     string
+	Required bool
+}
+
+// CLISkills is the single source of truth for which CLI skills setup injects and
+// doctor verifies, so injection and the preflight check cannot drift apart. All
+// three are required: an unattended fix must never guess a CLI's flags.
+var CLISkills = []CLISkill{
+	{"jira-cli", true},
+	{"gitlab-cli", true},
+	{"kibana-cli", true},
+}
+
+// SkillsAgentFlag maps our agentType to the `--agent` identifier used by the
+// `skills` CLI (vercel-labs/skills): note kiro's is `kiro-cli`, not `kiro`.
+// Returns "" for an empty/unknown (custom) agentType.
+func SkillsAgentFlag(agentType string) string {
+	switch agentType {
+	case "kiro":
+		return "kiro-cli"
+	case "claude-code":
+		return "claude-code"
+	case "codex":
+		return "codex"
+	case "cursor":
+		return "cursor"
+	default:
+		return ""
+	}
+}
+
+// SkillsDir returns the agent's OWN skill directory for agentType — the stable,
+// per-tool location each vibe-coding agent natively loads from (~/.kiro/skills,
+// ~/.claude/skills, ~/.codex/skills, ~/.cursor/skills). The shared ~/.agents
+// store is only a cross-agent compatibility shim (junctions); requiring the skill
+// in the agent's own directory is what makes loading reliable. Returns "" for an
+// empty/unknown (custom) agentType we cannot reason about.
+func SkillsDir(agentType, home string) string {
+	switch agentType {
+	case "kiro":
+		return filepath.Join(home, ".kiro", "skills")
+	case "claude-code":
+		return filepath.Join(home, ".claude", "skills")
+	case "codex":
+		return filepath.Join(home, ".codex", "skills")
+	case "cursor":
+		return filepath.Join(home, ".cursor", "skills")
+	default:
+		return ""
+	}
+}
+
+// kiroSkillResources renders the `skill://` resource URIs for the kiro agent
+// JSON, pointing at each CLI skill's absolute SKILL.md in kiro's own skill dir
+// (~/.kiro/skills). The spawned `kiro-cli chat` runs in the cloned repo's cwd,
+// not home, so a relative path would not resolve — the resource must be absolute.
+func kiroSkillResources(home string) []string {
+	dir := SkillsDir("kiro", home)
+	res := make([]string, 0, len(CLISkills))
+	for _, s := range CLISkills {
+		res = append(res, "skill://"+filepath.ToSlash(filepath.Join(dir, s.Name, "SKILL.md")))
+	}
+	return res
+}
+
 // ArtifactPaths returns the files that `setup --agent <agentType>` installs into
 // the user's home. It is the single source of truth for both installation and
 // doctor's "is the subagent template installed" verification. Returns nil for an
@@ -57,7 +127,10 @@ func InstallKiro(home, model string) error {
 		return fmt.Errorf("parse kiro agent json: %w", err)
 	}
 	agent["prompt"] = "file://./auto-bug-fix.md"
-	delete(agent, "resources")
+	// Inject the CLI skills the executor needs (jira-cli/gitlab-cli/kibana-cli)
+	// as on-demand skill:// resources. The workflow prompt stays in the prompt
+	// file; these only add the sibling-CLI usage skills.
+	agent["resources"] = kiroSkillResources(home)
 	// kiro pins the model via the agent JSON (no CLI --model flag).
 	if m := strings.TrimSpace(model); m != "" {
 		agent["model"] = m

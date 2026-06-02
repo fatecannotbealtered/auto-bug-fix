@@ -462,6 +462,30 @@ func templateProbe(agentType string) ([]string, bool) {
 	return missing, true
 }
 
+// skillProbe reports which required/optional CLI skills are missing from the
+// agent's skill directory. Mirrors templateProbe: unverifiable for a custom
+// (empty/unknown) agentType.
+func skillProbe(agentType string) (dir string, missingRequired, missingOptional []string, verifiable bool) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", nil, nil, false
+	}
+	dir = installer.SkillsDir(agentType, home)
+	if dir == "" {
+		return "", nil, nil, false
+	}
+	for _, s := range installer.CLISkills {
+		if _, err := os.Stat(filepath.Join(dir, s.Name, "SKILL.md")); err != nil {
+			if s.Required {
+				missingRequired = append(missingRequired, s.Name)
+			} else {
+				missingOptional = append(missingOptional, s.Name)
+			}
+		}
+	}
+	return dir, missingRequired, missingOptional, true
+}
+
 // resolveAgentCommand derives agent.command from agentType when no explicit
 // command is set, so a known agentType always launches the matching subagent and
 // cannot drift from the installed template. An explicit command (custom escape
@@ -492,7 +516,7 @@ func loadConfig(cfgPath string) (config.Config, error) {
 // broken environment (missing/unusable CLI, invalid config). Returns the config.
 func preflight(cfgPath string) config.Config {
 	cfg, err := loadConfig(cfgPath)
-	checks := doctor.Run(cfg, err, exec.LookPath, cliProbe, templateProbe)
+	checks := doctor.Run(cfg, err, exec.LookPath, cliProbe, templateProbe, skillProbe)
 	failed := doctor.HasFailure(checks)
 	// Surface every non-OK check: FAIL blocks, WARN is a reminder (e.g. an
 	// optional CLI missing) so a passing preflight is never silent about gaps.
@@ -524,7 +548,7 @@ func runDoctor(args []string) {
 
 	cfg, err := loadConfig(cfgPath)
 
-	checks := doctor.Run(cfg, err, exec.LookPath, cliProbe, templateProbe)
+	checks := doctor.Run(cfg, err, exec.LookPath, cliProbe, templateProbe, skillProbe)
 	ok := !doctor.HasFailure(checks)
 
 	// Agent-facing: --json emits a parseable result on stdout so the calling

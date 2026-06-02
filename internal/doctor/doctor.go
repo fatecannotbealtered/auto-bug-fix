@@ -7,6 +7,7 @@ package doctor
 
 import (
 	"encoding/json"
+	"strings"
 
 	"github.com/fatecannotbealtered/auto-bug-fix/internal/agent"
 	"github.com/fatecannotbealtered/auto-bug-fix/internal/config"
@@ -53,6 +54,11 @@ type Probe func(bin string, args ...string) ([]byte, error)
 // and whether agentType is one we can verify (false for empty/custom commands).
 type TemplateProbe func(agentType string) (missing []string, verifiable bool)
 
+// SkillProbe reports the agent's own skill directory plus which required and
+// optional CLI skills (jira-cli/gitlab-cli/kibana-cli) are missing from it, and
+// whether agentType is verifiable (false for empty/custom commands).
+type SkillProbe func(agentType string) (dir string, missingRequired, missingOptional []string, verifiable bool)
+
 // cliHealth is the JSON shape shared by the sibling CLIs' `doctor --json`.
 type cliHealth struct {
 	AuthValid bool   `json:"authValid"`
@@ -61,7 +67,7 @@ type cliHealth struct {
 
 // Run returns the preflight checks for cfg. cfgErr is the error from loading and
 // validating config (nil when it loaded and validated cleanly).
-func Run(cfg config.Config, cfgErr error, look LookPath, probe Probe, tmpl TemplateProbe) []Check {
+func Run(cfg config.Config, cfgErr error, look LookPath, probe Probe, tmpl TemplateProbe, skills SkillProbe) []Check {
 	checks := []Check{configCheck(cfgErr)}
 
 	// Config-independent checks always run — useful even when config is broken.
@@ -89,6 +95,7 @@ func Run(cfg config.Config, cfgErr error, look LookPath, probe Probe, tmpl Templ
 	}
 
 	checks = append(checks, agentTemplateCheck(tmpl, cfg.Agent.AgentType))
+	checks = append(checks, agentSkillsCheck(skills, cfg.Agent.AgentType))
 	if c, ok := commandDriftCheck(cfg.Agent); ok {
 		checks = append(checks, c)
 	}
@@ -113,6 +120,27 @@ func agentTemplateCheck(tmpl TemplateProbe, agentType string) Check {
 		return Check{"agent template", Fail, "not installed; run `auto-bug-fix setup --agent " + agentType + "`"}
 	}
 	return Check{"agent template", OK, "installed for " + agentType}
+}
+
+// agentSkillsCheck verifies the sibling-CLI skills (jira-cli/gitlab-cli/kibana-cli,
+// all required) are installed in the configured agent's skill directory. Without
+// them the spawned agent has no usage reference and guesses CLI flags.
+func agentSkillsCheck(skills SkillProbe, agentType string) Check {
+	dir, missingReq, missingOpt, verifiable := skills(agentType)
+	if !verifiable {
+		return Check{"cli skills", Warn, "custom agent (agentType unset); cannot verify jira-cli/gitlab-cli/kibana-cli skills are installed"}
+	}
+	if len(missingReq) > 0 {
+		hint := "install each into the agent's own skill dir"
+		if flag := installer.SkillsAgentFlag(agentType); flag != "" {
+			hint = "install each: `npx skills add fatecannotbealtered/<skill> -g -a " + flag + " -y`"
+		}
+		return Check{"cli skills", Fail, "missing required skill(s) " + strings.Join(missingReq, ", ") + " in " + dir + " — " + hint}
+	}
+	if len(missingOpt) > 0 {
+		return Check{"cli skills", Warn, "optional skill(s) missing from " + dir + ": " + strings.Join(missingOpt, ", ")}
+	}
+	return Check{"cli skills", OK, "jira-cli, gitlab-cli, kibana-cli installed in " + dir}
 }
 
 func configCheck(cfgErr error) Check {

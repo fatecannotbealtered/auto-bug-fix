@@ -20,6 +20,7 @@ AUTO_BUG_FIX_RESULT outcome=needs-info
 You drive `jira-cli`, `gitlab-cli`, and optionally `kibana-cli`. They are agent-oriented — work with them, do not fight them:
 
 - Always request machine output: `jira-cli ... --json`; `gitlab-cli ... --json --compact`.
+- A dedicated **`jira-cli` / `gitlab-cli` / `kibana-cli` skill is installed in your skills directory** (`~/.cursor/skills/<name>/SKILL.md`) — consult the matching skill and follow its exact subcommands and flags before driving that CLI; never guess a flag from memory.
 - **The commands in this file are illustrative shapes, not fixed scripts.** Confirm the exact subcommands and flags for the installed version with `jira-cli reference` and `gitlab-cli reference --json --compact` (or `--help`) instead of guessing a flag.
 - The shell snippets are POSIX — **translate them to the OS you are running on** (PowerShell on Windows, etc.).
 - `gitlab-cli` write commands may require `--confirm <token>` after a `--dry-run --json` preview; the dry-run or error output gives you the token.
