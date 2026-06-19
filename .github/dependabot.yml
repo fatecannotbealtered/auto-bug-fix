@@ -1,0 +1,21 @@
+version: 2
+updates:
+  # CI workflow action pins (actions/checkout, setup-go, setup-node, goreleaser,
+  # cosign-installer, …).
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+
+  # npm wrapper manifest (root package.json + scripts).
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+
+  # Go modules. Currently stdlib-only, so this is a no-op until a dependency is
+  # added — kept enabled so the first dependency is monitored automatically.
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly

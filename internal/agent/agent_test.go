@@ -94,14 +94,14 @@ func TestTrigger_ExitNonZero(t *testing.T) {
 }
 
 func TestParseResultMarker(t *testing.T) {
-	result := agent.ParseResultMarker("logs\nAUTO_BUG_FIX_RESULT outcome=auto-fix mr=https://gitlab.example/mr/1 handoff=.tcl/handoff/PROJ-1.needs-confirmation.md\n")
+	result := agent.ParseResultMarker("logs\nAUTO_BUG_FIX_RESULT outcome=auto-fix mr=https://gitlab.example/mr/1 handoff=.repo-knowledge/handoff/PROJ-1.needs-confirmation.md\n")
 	if result.Outcome != "auto-fix" {
 		t.Fatalf("outcome: got %q", result.Outcome)
 	}
 	if result.MRURL != "https://gitlab.example/mr/1" {
 		t.Fatalf("mr url: got %q", result.MRURL)
 	}
-	if result.HandoffPath != ".tcl/handoff/PROJ-1.needs-confirmation.md" {
+	if result.HandoffPath != ".repo-knowledge/handoff/PROJ-1.needs-confirmation.md" {
 		t.Fatalf("handoff path: got %q", result.HandoffPath)
 	}
 }

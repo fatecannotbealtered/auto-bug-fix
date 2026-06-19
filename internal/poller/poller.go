@@ -168,19 +168,50 @@ type searchResult struct {
 	} `json:"issues"`
 }
 
+type searchEnvelope struct {
+	OK    *bool        `json:"ok"`
+	Data  searchResult `json:"data"`
+	Error *struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	} `json:"error"`
+}
+
 // parseJiraKeys extracts issue keys from jira-cli search JSON output.
 func parseJiraKeys(data []byte) ([]string, error) {
+	var env searchEnvelope
+	if err := json.Unmarshal(data, &env); err != nil {
+		return nil, fmt.Errorf("parse jira-cli output: %w", err)
+	}
+	if env.OK != nil {
+		if !*env.OK {
+			msg := "jira-cli returned ok:false"
+			if env.Error != nil && env.Error.Message != "" {
+				msg = env.Error.Message
+			}
+			if env.Error != nil && env.Error.Code != "" {
+				msg = env.Error.Code + ": " + msg
+			}
+			return nil, fmt.Errorf("%s", msg)
+		}
+		return keysFromSearchResult(env.Data), nil
+	}
+
 	var result searchResult
 	if err := json.Unmarshal(data, &result); err != nil {
 		return nil, fmt.Errorf("parse jira-cli output: %w", err)
 	}
+	return keysFromSearchResult(result), nil
+}
+
+func keysFromSearchResult(result searchResult) []string {
 	keys := make([]string, 0, len(result.Issues))
 	for _, issue := range result.Issues {
 		if issue.Key != "" {
 			keys = append(keys, issue.Key)
 		}
 	}
-	return keys, nil
+	return keys
 }
 
 // ParseJiraKeysForTest exposes parseJiraKeys for unit testing.

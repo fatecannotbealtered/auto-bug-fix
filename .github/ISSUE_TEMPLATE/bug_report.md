@@ -52,7 +52,7 @@ paste logs here
     "cleanup": "keep"
   },
   "knowledge": {
-    "dir": ".tcl",
+    "dir": ".repo-knowledge",
     "read": true,
     "update": true,
     "handoff": true,

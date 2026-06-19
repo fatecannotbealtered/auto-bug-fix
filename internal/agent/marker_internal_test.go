@@ -31,7 +31,7 @@ func TestMarkerScanner_DetectsAcrossChunks(t *testing.T) {
 	s := &markerScanner{onMarker: func() { fired++ }}
 
 	s.Write([]byte("some log line\nAUTO_BUG_FIX_"))
-	s.Write([]byte("RESULT outcome=needs-info handoff=.tcl/handoff/x.md"))
+	s.Write([]byte("RESULT outcome=needs-info handoff=.repo-knowledge/handoff/x.md"))
 	if fired != 0 {
 		t.Fatal("no newline yet — must not trigger on a partial line")
 	}

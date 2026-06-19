@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"strings"
 	"sync"
 	"time"
 )
@@ -105,7 +106,7 @@ func (s *State) StartIssue(issueKey, agentCommand string) {
 	entry.StartedAt = now
 	entry.CompletedAt = time.Time{}
 	entry.UpdatedAt = now
-	entry.AgentCommand = agentCommand
+	entry.AgentCommand = RedactCommand(agentCommand)
 	entry.Attempts++
 	entry.Outcome = ""
 	entry.MRURL = ""
@@ -113,6 +114,36 @@ func (s *State) StartIssue(issueKey, agentCommand string) {
 	entry.ExitCode = 0
 	entry.DurationMillis = 0
 	entry.LastError = ""
+}
+
+// RedactCommand removes obvious inline secrets before a command is written to
+// state or returned through context. Secrets should live in each sibling CLI's
+// credential store, but this avoids preserving accidental token args.
+func RedactCommand(command string) string {
+	fields := strings.Fields(command)
+	for i := 0; i < len(fields); i++ {
+		lower := strings.ToLower(fields[i])
+		if containsSecretName(lower) {
+			if strings.Contains(fields[i], "=") {
+				parts := strings.SplitN(fields[i], "=", 2)
+				fields[i] = parts[0] + "=<redacted>"
+				continue
+			}
+			if i+1 < len(fields) {
+				fields[i+1] = "<redacted>"
+			}
+		}
+	}
+	return strings.Join(fields, " ")
+}
+
+func containsSecretName(value string) bool {
+	for _, marker := range []string{"token", "password", "passwd", "secret", "authorization", "api-key", "apikey"} {
+		if strings.Contains(value, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 type FinishDetails struct {

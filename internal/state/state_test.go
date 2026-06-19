@@ -65,7 +65,7 @@ func TestStartAndFinishIssue_RecordsAuditFields(t *testing.T) {
 	s.FinishIssue("PROJ-1", state.StatusDone, state.FinishDetails{
 		Outcome:        "auto-fix",
 		MRURL:          "https://gitlab.example/mr/1",
-		HandoffPath:    ".tcl/handoff/PROJ-1.needs-confirmation.md",
+		HandoffPath:    ".repo-knowledge/handoff/PROJ-1.needs-confirmation.md",
 		ExitCode:       0,
 		DurationMillis: 42,
 	})
@@ -80,7 +80,7 @@ func TestStartAndFinishIssue_RecordsAuditFields(t *testing.T) {
 	if entry.Outcome != "auto-fix" || entry.MRURL == "" {
 		t.Fatalf("outcome audit not recorded: %+v", entry)
 	}
-	if entry.HandoffPath != ".tcl/handoff/PROJ-1.needs-confirmation.md" {
+	if entry.HandoffPath != ".repo-knowledge/handoff/PROJ-1.needs-confirmation.md" {
 		t.Fatalf("handoff path not recorded: %+v", entry)
 	}
 	if entry.DurationMillis != 42 {
@@ -88,6 +88,16 @@ func TestStartAndFinishIssue_RecordsAuditFields(t *testing.T) {
 	}
 	if entry.CompletedAt.IsZero() {
 		t.Fatal("completedAt should be recorded")
+	}
+}
+
+func TestStartIssueRedactsSecretLikeCommandArgs(t *testing.T) {
+	s := state.New()
+	s.StartIssue("PROJ-1", "agent --token abc --password=def --safe ok")
+
+	entry := s.Issues["PROJ-1"]
+	if entry.AgentCommand != "agent --token <redacted> --password=<redacted> --safe ok" {
+		t.Fatalf("secret args were not redacted: %q", entry.AgentCommand)
 	}
 }
 

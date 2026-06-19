@@ -45,7 +45,7 @@ func (f *fakeTrigger) Trigger(issueKey string) (agent.Result, error) {
 	if outcome == "" {
 		outcome = agent.OutcomeAutoFix
 	}
-	return agent.Result{Outcome: outcome, MRURL: "https://gitlab.example/mr/1", HandoffPath: ".tcl/handoff/PROJ-1.needs-confirmation.md", ExitCode: 0, DurationMillis: 10}, nil
+	return agent.Result{Outcome: outcome, MRURL: "https://gitlab.example/mr/1", HandoffPath: ".repo-knowledge/handoff/PROJ-1.needs-confirmation.md", ExitCode: 0, DurationMillis: 10}, nil
 }
 
 var emptyFilter = config.FilterConfig{}
@@ -210,6 +210,44 @@ func TestParseJiraKeys_ValidJSON(t *testing.T) {
 	}
 	if len(keys) != 2 || keys[0] != "PROJ-1" {
 		t.Fatalf("got %v", keys)
+	}
+}
+
+func TestParseJiraKeys_EnvelopeJSON(t *testing.T) {
+	data, _ := json.Marshal(map[string]any{
+		"ok":             true,
+		"schema_version": "1.0",
+		"data": map[string]any{
+			"issues": []map[string]any{
+				{"key": "PROJ-1"},
+				{"key": "PROJ-2"},
+			},
+		},
+	})
+	keys, err := poller.ParseJiraKeysForTest(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(keys) != 2 || keys[0] != "PROJ-1" || keys[1] != "PROJ-2" {
+		t.Fatalf("got %v", keys)
+	}
+}
+
+func TestParseJiraKeys_ErrorEnvelope(t *testing.T) {
+	data, _ := json.Marshal(map[string]any{
+		"ok":             false,
+		"schema_version": "1.0",
+		"error": map[string]any{
+			"code":    "E_VALIDATION",
+			"message": "bad jql",
+		},
+	})
+	_, err := poller.ParseJiraKeysForTest(data)
+	if err == nil {
+		t.Fatal("expected error for ok:false envelope")
+	}
+	if got := err.Error(); got != "E_VALIDATION: bad jql" {
+		t.Fatalf("error = %q", got)
 	}
 }
 

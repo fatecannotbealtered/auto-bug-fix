@@ -72,7 +72,7 @@ var envVarRe = regexp.MustCompile(`\$([A-Z_][A-Z0-9_]*)`)
 const DefaultPollIntervalSeconds = 300
 const DefaultPollMaxConcurrent = 3
 const DefaultWorkspaceCleanup = "keep"
-const DefaultKnowledgeDir = ".tcl"
+const DefaultKnowledgeDir = ".repo-knowledge"
 const DefaultKnowledgeHandoffDir = "handoff"
 
 func DefaultWorkspaceRoot() string {

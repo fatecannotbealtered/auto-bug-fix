@@ -32,7 +32,7 @@ internal/
 agents/                     ← per-agent templates (kiro / cursor / claude-code / codex), embedded in the binary
 skills/auto-bug-fix/
   SKILL.md                  ← generic published agent workflow (installed via npx skills add)
-scripts/                    ← npm wrapper: install.js (download binary) + run.js (exec it)
+scripts/                    ← npm wrapper + platform-package release helpers
 .github/workflows/          ← ci.yml (3-OS matrix) + release.yml (GoReleaser → GitHub Releases → npm publish)
 .goreleaser.yml             ← cross-platform release build
 package.json                ← npm distribution manifest

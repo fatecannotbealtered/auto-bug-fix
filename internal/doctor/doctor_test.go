@@ -2,6 +2,7 @@ package doctor
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/fatecannotbealtered/auto-bug-fix/internal/config"
@@ -71,6 +72,15 @@ func levelOf(checks []Check, name string) Level {
 	return -1
 }
 
+func detailOf(checks []Check, name string) string {
+	for _, c := range checks {
+		if c.Name == name {
+			return c.Detail
+		}
+	}
+	return ""
+}
+
 func cfgWith(command, agentType string) config.Config {
 	return config.Config{
 		Agent: config.AgentConfig{Command: command, AgentType: agentType},
@@ -86,6 +96,51 @@ func allPresent() map[string]bool {
 
 func allAuthed() map[string]string {
 	return map[string]string{"jira-cli": authOK, "gitlab-cli": authOK, "kibana-cli": authOK}
+}
+
+func TestRun_CapabilityDoctorEnvelope(t *testing.T) {
+	enveloped := `{"ok":true,"schema_version":"1.0","data":{"authValid":true,"host":"https://jira.example.com"},"meta":{"duration_ms":1}}`
+	checks := Run(cfgWith("kiro-cli chat \"fix {issueKey}\"", "kiro"), nil, lookFake(allPresent()), probeFake(map[string]string{
+		"jira-cli":   enveloped,
+		"gitlab-cli": enveloped,
+		"kibana-cli": enveloped,
+	}), tmplInstalled, skillsInstalled)
+	if HasFailure(checks) {
+		t.Fatalf("expected enveloped sibling CLI doctor output to pass, got %+v", checks)
+	}
+	if got := levelOf(checks, "gitlab-cli"); got != OK {
+		t.Errorf("gitlab-cli should be OK from enveloped doctor output, got %v", got)
+	}
+}
+
+func TestRun_JiraDoctorChecksEnvelope(t *testing.T) {
+	jiraDoctor := `{"ok":true,"schema_version":"1.0","data":{"checks":[{"check":"auth","status":"pass"},{"check":"network","status":"pass"}],"host":"https://jira.example.com"},"meta":{"duration_ms":1}}`
+	checks := Run(cfgWith("kiro-cli chat \"fix {issueKey}\"", "kiro"), nil, lookFake(allPresent()), probeFake(map[string]string{
+		"jira-cli":   jiraDoctor,
+		"gitlab-cli": authOK,
+		"kibana-cli": authOK,
+	}), tmplInstalled, skillsInstalled)
+	if HasFailure(checks) {
+		t.Fatalf("expected Jira checks envelope to pass, got %+v", checks)
+	}
+	if got := levelOf(checks, "jira-cli"); got != OK {
+		t.Errorf("jira-cli should be OK from auth/network checks, got %v", got)
+	}
+}
+
+func TestRun_JiraDoctorChecksAuthFail(t *testing.T) {
+	jiraDoctor := `{"ok":true,"schema_version":"1.0","data":{"checks":[{"check":"auth","status":"fail"},{"check":"network","status":"pass"}],"host":"https://jira.example.com"},"meta":{"duration_ms":1}}`
+	checks := Run(cfgWith("kiro-cli chat \"fix {issueKey}\"", "kiro"), nil, lookFake(allPresent()), probeFake(map[string]string{
+		"jira-cli":   jiraDoctor,
+		"gitlab-cli": authOK,
+		"kibana-cli": authOK,
+	}), tmplInstalled, skillsInstalled)
+	if !HasFailure(checks) {
+		t.Fatalf("expected Jira auth failure to fail, got %+v", checks)
+	}
+	if got := levelOf(checks, "jira-cli"); got != Fail {
+		t.Errorf("jira-cli should Fail from auth check, got %v", got)
+	}
 }
 
 func TestRun_AllUsable(t *testing.T) {
@@ -120,6 +175,20 @@ func TestRun_RequiredCliUnauthenticatedFails(t *testing.T) {
 	}
 	if got := levelOf(checks, "jira-cli"); got != Fail {
 		t.Errorf("unauthenticated jira-cli should Fail, got %v", got)
+	}
+}
+
+func TestRun_JiraUnauthenticatedHint(t *testing.T) {
+	checks := Run(cfgWith("kiro-cli", "kiro"), nil, lookFake(allPresent()), probeFake(map[string]string{
+		"jira-cli":   `{"ok":true,"schema_version":"1.0","data":{"checks":[{"check":"auth","status":"fail"},{"check":"network","status":"pass"}],"host":"https://jira.example.com"}}`,
+		"gitlab-cli": authOK,
+		"kibana-cli": authOK,
+	}), tmplInstalled, skillsInstalled)
+	if !HasFailure(checks) {
+		t.Fatal("expected failure when jira-cli reports auth failure")
+	}
+	if got := detailOf(checks, "jira-cli"); !strings.Contains(got, "jira-cli login") {
+		t.Errorf("jira-cli auth hint should use jira-cli login, got %q", got)
 	}
 }
 

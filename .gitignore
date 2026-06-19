@@ -18,6 +18,12 @@ node_modules/
 config.json
 *.local.json
 .env
+.auto-bug-fix/
+confirm.secret
+confirm-consumed.json
+poller.pid
+poller.log
+state.json
 
 # IDE
 .idea/

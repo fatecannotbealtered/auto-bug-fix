@@ -102,19 +102,27 @@ func TestArtifactPaths_MatchInstallers(t *testing.T) {
 	}
 }
 
-func TestInstallCursor_CreatesMDC(t *testing.T) {
+func TestInstallCursor_CreatesGlobalSkill(t *testing.T) {
 	useTempWorkingDir(t)
 	home := t.TempDir()
 
 	if err := installer.InstallCursor(home); err != nil {
 		t.Fatal(err)
 	}
-	data, err := os.ReadFile(filepath.Join(home, ".cursor", "rules", "auto-bug-fix.mdc"))
+	// Cursor auto-loads skills from ~/.cursor/skills/; a home ~/.cursor/rules/*.mdc
+	// is not an auto-loaded rules location, so the workflow ships as a global skill.
+	data, err := os.ReadFile(filepath.Join(home, ".cursor", "skills", "auto-bug-fix", "SKILL.md"))
 	if err != nil {
-		t.Fatal("mdc not created")
+		t.Fatal("cursor SKILL.md not created")
 	}
-	if !strings.Contains(string(data), "alwaysApply") {
-		t.Error("mdc should contain alwaysApply")
+	if !strings.Contains(string(data), "name: auto-bug-fix") {
+		t.Error("SKILL.md should carry SKILL frontmatter (name)")
+	}
+	if !strings.Contains(string(data), "AUTO_BUG_FIX_RESULT") {
+		t.Error("SKILL.md should contain the execution workflow body")
+	}
+	if strings.Contains(string(data), "alwaysApply") {
+		t.Error("rule frontmatter (alwaysApply) should be stripped from the skill")
 	}
 }
 
@@ -185,5 +193,11 @@ func TestAgentCommand(t *testing.T) {
 	}
 	if cmd := installer.AgentCommand("kiro", "my-model"); strings.Contains(cmd, "--model") {
 		t.Errorf("kiro has no --model flag; model belongs in the agent JSON, got %q", cmd)
+	}
+
+	// kiro grants headless tool permission with least privilege: pre-trust exactly
+	// the agent's declared tools via --trust-tools, never the broad --trust-all-tools.
+	if cmd := installer.AgentCommand("kiro", ""); strings.Contains(cmd, "--trust-all-tools") || !strings.Contains(cmd, "--trust-tools=fs_read,fs_write,execute_bash,grep,glob") {
+		t.Errorf("kiro should use least-privilege --trust-tools, got %q", cmd)
 	}
 }

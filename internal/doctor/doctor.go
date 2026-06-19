@@ -65,6 +65,55 @@ type cliHealth struct {
 	Host      string `json:"host"`
 }
 
+type cliDoctorCheck struct {
+	Check  string `json:"check"`
+	Status string `json:"status"`
+}
+
+type cliHealthData struct {
+	AuthValid bool             `json:"authValid"`
+	Host      string           `json:"host"`
+	Checks    []cliDoctorCheck `json:"checks"`
+}
+
+type cliHealthEnvelope struct {
+	OK   bool          `json:"ok"`
+	Data cliHealthData `json:"data"`
+}
+
+func parseCLIHealth(out []byte) (cliHealth, error) {
+	var h cliHealth
+	if err := json.Unmarshal(out, &h); err != nil {
+		return cliHealth{}, err
+	}
+	if h.AuthValid || h.Host != "" {
+		return h, nil
+	}
+	var env cliHealthEnvelope
+	if err := json.Unmarshal(out, &env); err != nil {
+		return cliHealth{}, err
+	}
+	if len(env.Data.Checks) > 0 {
+		authPass := false
+		networkPass := false
+		for _, check := range env.Data.Checks {
+			name := strings.ToLower(check.Check)
+			status := strings.ToLower(check.Status)
+			switch name {
+			case "auth":
+				authPass = status == "pass"
+			case "network":
+				networkPass = status == "pass"
+			}
+		}
+		return cliHealth{AuthValid: authPass && networkPass, Host: env.Data.Host}, nil
+	}
+	if env.Data.AuthValid || env.Data.Host != "" {
+		return cliHealth{AuthValid: env.Data.AuthValid, Host: env.Data.Host}, nil
+	}
+	return h, nil
+}
+
 // Run returns the preflight checks for cfg. cfgErr is the error from loading and
 // validating config (nil when it loaded and validated cleanly).
 func Run(cfg config.Config, cfgErr error, look LookPath, probe Probe, tmpl TemplateProbe, skills SkillProbe) []Check {
@@ -76,6 +125,7 @@ func Run(cfg config.Config, cfgErr error, look LookPath, probe Probe, tmpl Templ
 		capabilityCheck(look, probe, "jira-cli", true),
 		capabilityCheck(look, probe, "gitlab-cli", true),
 		capabilityCheck(look, probe, "kibana-cli", false),
+		capabilityCheck(look, probe, "archery-cli", false),
 	)
 
 	// Config-derived checks only make sense once config loaded and validated;
@@ -128,7 +178,7 @@ func agentTemplateCheck(tmpl TemplateProbe, agentType string) Check {
 func agentSkillsCheck(skills SkillProbe, agentType string) Check {
 	dir, missingReq, missingOpt, verifiable := skills(agentType)
 	if !verifiable {
-		return Check{"cli skills", Warn, "custom agent (agentType unset); cannot verify jira-cli/gitlab-cli/kibana-cli skills are installed"}
+		return Check{"cli skills", Warn, "custom agent (agentType unset); cannot verify jira-cli/gitlab-cli/kibana-cli/archery-cli skills are installed"}
 	}
 	if len(missingReq) > 0 {
 		hint := "install each into the agent's own skill dir"
@@ -140,11 +190,11 @@ func agentSkillsCheck(skills SkillProbe, agentType string) Check {
 	if len(missingOpt) > 0 {
 		detail := "optional skill(s) missing from " + dir + ": " + strings.Join(missingOpt, ", ")
 		if flag := installer.SkillsAgentFlag(agentType); flag != "" {
-			detail += " — install with `npx skills add fatecannotbealtered/<skill> -g -a " + flag + " -y` if the workflow needs Kibana log analysis"
+			detail += " — install with `npx skills add fatecannotbealtered/<skill> -g -a " + flag + " -y` if the workflow needs log (kibana) or database-state (archery) evidence"
 		}
 		return Check{"cli skills", Warn, detail}
 	}
-	return Check{"cli skills", OK, "jira-cli, gitlab-cli, kibana-cli installed in " + dir}
+	return Check{"cli skills", OK, "jira-cli, gitlab-cli, kibana-cli, archery-cli installed in " + dir}
 }
 
 func configCheck(cfgErr error) Check {
@@ -169,8 +219,7 @@ func capabilityCheck(look LookPath, probe Probe, bin string, required bool) Chec
 		return Check{bin, failLevel(required), "not found on PATH"}
 	}
 	out, perr := probe(bin, "doctor", "--json", "--quiet")
-	var h cliHealth
-	unmarshalErr := json.Unmarshal(out, &h)
+	h, unmarshalErr := parseCLIHealth(out)
 	if h.AuthValid {
 		detail := "authenticated"
 		if h.Host != "" {
@@ -183,7 +232,22 @@ func capabilityCheck(look LookPath, probe Probe, bin string, required bool) Chec
 	if perr != nil || unmarshalErr != nil {
 		return Check{bin, failLevel(required), "not usable; run `" + bin + " doctor`"}
 	}
-	return Check{bin, failLevel(required), "not authenticated; run `" + bin + " auth login`"}
+	return Check{bin, failLevel(required), "not authenticated; run `" + authLoginCommand(bin) + "`"}
+}
+
+func authLoginCommand(bin string) string {
+	switch bin {
+	case "jira-cli":
+		return "jira-cli login"
+	case "gitlab-cli":
+		return "gitlab-cli auth login"
+	case "kibana-cli":
+		return "kibana-cli auth login"
+	case "archery-cli":
+		return "archery-cli auth login"
+	default:
+		return bin + " auth login"
+	}
 }
 
 // commandDriftCheck warns when a known agentType also has an explicit

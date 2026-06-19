@@ -25,7 +25,34 @@ import (
 )
 
 // version is overridden at release time via -ldflags "-X .../cmd.version=<tag>".
-var version = "1.0.5"
+var version = "1.0.6"
+
+const schemaVersion = "1.0"
+
+var (
+	commandStartedAt  time.Time
+	changelogMarkdown string
+)
+
+// SetChangelog injects the root CHANGELOG.md embedded by main.
+func SetChangelog(markdown string) {
+	changelogMarkdown = markdown
+}
+
+type jsonEnvelope struct {
+	OK            bool             `json:"ok"`
+	SchemaVersion string           `json:"schema_version"`
+	Data          any              `json:"data,omitempty"`
+	Error         *jsonError       `json:"error,omitempty"`
+	Meta          map[string]int64 `json:"meta"`
+}
+
+type jsonError struct {
+	Code      string         `json:"code"`
+	Message   string         `json:"message"`
+	Details   map[string]any `json:"details,omitempty"`
+	Retryable bool           `json:"retryable"`
+}
 
 func defaultConfigPath() string {
 	home, _ := os.UserHomeDir()
@@ -47,77 +74,113 @@ func defaultLogPath() string {
 	return filepath.Join(home, ".auto-bug-fix", "poller.log")
 }
 
+// pidString renders a PID as a string for JSON output, keeping IDs as strings
+// per the machine contract (CLI-SPEC §12.6). An empty string means "no PID"
+// (poller not running), which is unambiguous next to the `running` flag.
+func pidString(pid int) string {
+	if pid <= 0 {
+		return ""
+	}
+	return strconv.Itoa(pid)
+}
+
 func Execute() {
-	if len(os.Args) < 2 {
-		printUsage()
-		os.Exit(1)
+	commandStartedAt = time.Now()
+	activeOutput = outputOptions{Format: "json"}
+	args := setOutputFromArgs(os.Args[1:])
+	if len(args) < 1 {
+		fail(exitUsage, "E_USAGE", "usage: auto-bug-fix <command>", map[string]any{"commands": commandList()}, false)
 	}
 
-	switch os.Args[1] {
-	case "setup":
-		runSetup(os.Args[2:])
-	case "start":
-		runStart(os.Args[2:])
-	case "stop":
-		runStop(os.Args[2:])
-	case "status":
-		runStatus(os.Args[2:])
-	case "doctor":
-		runDoctor(os.Args[2:])
-	case "fix":
-		if len(os.Args) < 3 {
-			fmt.Fprintln(os.Stderr, "usage: auto-bug-fix fix <issueKey>")
-			os.Exit(1)
-		}
-		runFix(os.Args[2], os.Args[3:])
-	case "version", "--version", "-v":
-		fmt.Println(version)
-	default:
+	switch args[0] {
+	case "help", "--help", "-h":
 		printUsage()
-		os.Exit(1)
+	case "setup":
+		runSetup(args[1:])
+	case "start":
+		runStart(args[1:])
+	case "stop":
+		runStop(args[1:])
+	case "status":
+		runStatus(args[1:])
+	case "doctor":
+		runDoctor(args[1:])
+	case "context":
+		runContext(args[1:])
+	case "reference":
+		runReference(args[1:])
+	case "changelog":
+		runChangelog(args[1:])
+	case "update":
+		runUpdate(args[1:])
+	case "fix":
+		if len(args) < 2 {
+			fail(exitUsage, "E_USAGE", "usage: auto-bug-fix fix <issueKey>", nil, false)
+		}
+		runFix(args[1], args[2:])
+	case "version", "--version", "-v":
+		if wantsText() {
+			fmt.Println(version)
+			return
+		}
+		printJSON(map[string]any{"version": version})
+	default:
+		fail(exitUsage, "E_USAGE", "unknown command: "+args[0], map[string]any{"commands": commandList()}, false)
 	}
 }
 
-func printJSON(v any) {
-	b, err := json.MarshalIndent(v, "", "  ")
-	if err != nil {
-		log.Fatalf("marshal json: %v", err)
-	}
-	fmt.Println(string(b))
+func commandList() []string {
+	return []string{"setup", "start", "stop", "status", "doctor", "context", "reference", "changelog", "update", "fix", "version"}
 }
 
 func printUsage() {
 	fmt.Println(`auto-bug-fix - autonomous bug fix tool
 
 Usage:
-  auto-bug-fix setup [--agent type]   Create config template
-  auto-bug-fix start [--detach] [--json]   Start polling loop (--detach runs in background)
-  auto-bug-fix stop [--json]          Stop the background poller and its child agents
-  auto-bug-fix status [--json]        Show whether the background poller is running
-  auto-bug-fix doctor [--json]        Check config and required CLIs (agent, jira-cli, gitlab-cli, git)
-  auto-bug-fix fix <issueKey>         Manually trigger a fix
-  auto-bug-fix version                Print version`)
+  auto-bug-fix setup [--agent type] --dry-run|--confirm <token>   Create config template
+  auto-bug-fix start [--detach] --dry-run|--confirm <token>       Start polling loop
+  auto-bug-fix stop --dry-run|--confirm <token>                   Stop poller and child agents
+  auto-bug-fix status                                             Show whether the poller is running
+  auto-bug-fix doctor                                             Check config and required CLIs
+  auto-bug-fix context                                            Show local paths and runtime context
+  auto-bug-fix reference                                          Describe commands and machine contract
+  auto-bug-fix changelog [--since vX.Y.Z]                         Show version changes
+  auto-bug-fix update --check|--dry-run|--confirm <token>          Update package and Skill
+  auto-bug-fix fix <issueKey> --dry-run|--confirm <token>          Manually trigger a fix
+  auto-bug-fix version                                           Print version
+
+Global flags:
+  --format json|text|raw   Output format (default: json)
+  --json                   Compatibility alias for --format json
+  --compact                Compact JSON output
+  --fields a,b             Project selected data fields
+  --quiet                  Suppress non-error stderr output`)
 }
 
 // ── setup ────────────────────────────────────────────────────────────────────
 
 func runSetup(args []string) {
-	fs := flag.NewFlagSet("setup", flag.ExitOnError)
+	write, args := parseWriteArgs(args)
+	fs := flag.NewFlagSet("setup", flag.ContinueOnError)
 	cfgPath := fs.String("config", defaultConfigPath(), "config file path")
 	agentType := fs.String("agent", "", "agent type: kiro, cursor, claude-code, codex, or empty")
 	if err := fs.Parse(args); err != nil {
-		log.Fatalf("setup: %v", err)
+		fail(exitUsage, "E_USAGE", "setup: "+err.Error(), nil, false)
 	}
 	if !validSetupAgentType(*agentType) {
-		log.Fatalf("setup: --agent must be kiro, cursor, claude-code, codex, or empty")
+		fail(exitUsage, "E_VALIDATION", "setup: --agent must be kiro, cursor, claude-code, codex, or empty", nil, false)
+	}
+	detail := map[string]any{"configPath": *cfgPath, "agentType": *agentType}
+	if handleWriteGate(write, "setup auto-bug-fix", detail) {
+		return
 	}
 
 	dir := filepath.Dir(*cfgPath)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		log.Fatalf("setup: %v", err)
+		failErr("setup", err)
 	}
 	if _, err := os.Stat(*cfgPath); err == nil {
-		fmt.Printf("Config already exists at %s\n", *cfgPath)
+		installed := false
 		if *agentType != "" {
 			// Re-running setup propagates the current config's model into the
 			// kiro agent JSON (kiro pins its model there, not via a CLI flag).
@@ -126,8 +189,9 @@ func runSetup(args []string) {
 				model = existing.Agent.Model
 			}
 			installAgentTemplate(*agentType, model)
+			installed = true
 		}
-		fmt.Println("Edit it directly or delete it and run setup again.")
+		printSetupResult(false, true, *cfgPath, *agentType, installed)
 		return
 	}
 
@@ -139,21 +203,53 @@ func runSetup(args []string) {
 	cfg := defaultConfig(*agentType)
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
-		log.Fatalf("setup: %v", err)
+		failErr("setup", err)
 	}
 	if err := os.WriteFile(*cfgPath, data, 0o600); err != nil {
-		log.Fatalf("setup: %v", err)
+		failErr("setup", err)
 	}
 
-	fmt.Printf("Config created at %s\n", *cfgPath)
-	if *agentType == "" {
-		fmt.Println("Next: fill in agent.command (custom agent) and poll.filter, then authenticate jira-cli and gitlab-cli (`jira-cli login`, `gitlab-cli auth login`) and run `auto-bug-fix doctor`.")
-	} else {
-		fmt.Println("Next: set agent.model (required) and poll.filter, then authenticate jira-cli and gitlab-cli (`jira-cli login`, `gitlab-cli auth login`) and run `auto-bug-fix doctor`.")
-		fmt.Printf("Launch command is derived from agentType=%s at runtime: %s\n", *agentType, installer.AgentCommand(*agentType, ""))
-		if *agentType == "kiro" {
-			fmt.Println("Note: kiro pins its model in the agent JSON — re-run `auto-bug-fix setup --agent kiro` after setting agent.model to apply it.")
-		}
+	printSetupResult(true, false, *cfgPath, *agentType, *agentType != "")
+}
+
+func printSetupResult(created, alreadyExists bool, cfgPath, agentType string, installedAgentTemplate bool) {
+	next := "fill in agent.command (custom agent) and poll.filter, then authenticate jira-cli and gitlab-cli"
+	derivedCommand := ""
+	if agentType != "" {
+		next = "set agent.model (required) and poll.filter, then authenticate jira-cli and gitlab-cli"
+		derivedCommand = installer.AgentCommand(agentType, "")
+	}
+	data := map[string]any{
+		"created":                created,
+		"alreadyExists":          alreadyExists,
+		"configPath":             cfgPath,
+		"agentType":              agentType,
+		"installedAgentTemplate": installedAgentTemplate,
+		"next_steps": []string{
+			next,
+			"run jira-cli login and gitlab-cli auth login on the poller machine",
+			"run auto-bug-fix doctor --compact",
+		},
+	}
+	if derivedCommand != "" {
+		data["derivedCommand"] = derivedCommand
+	}
+	if !wantsText() {
+		printJSON(data)
+		return
+	}
+	if alreadyExists {
+		fmt.Printf("Config already exists at %s\n", cfgPath)
+		fmt.Println("Edit it directly or delete it and run setup again.")
+		return
+	}
+	fmt.Printf("Config created at %s\n", cfgPath)
+	fmt.Println("Next: " + next + " (`jira-cli login`, `gitlab-cli auth login`) and run `auto-bug-fix doctor`.")
+	if derivedCommand != "" {
+		fmt.Printf("Launch command is derived from agentType=%s at runtime: %s\n", agentType, derivedCommand)
+	}
+	if agentType == "kiro" {
+		fmt.Println("Note: kiro pins its model in the agent JSON — re-run `auto-bug-fix setup --agent kiro` after setting agent.model to apply it.")
 	}
 }
 
@@ -172,24 +268,32 @@ func installAgentTemplate(agentType, model string) {
 	switch agentType {
 	case "kiro":
 		if err := installer.InstallKiro(home, model); err != nil {
-			log.Fatalf("setup: install kiro agent: %v", err)
+			failErr("setup: install kiro agent", err)
 		}
-		fmt.Println("Kiro agent configured at ~/.kiro/agents/auto-bug-fix.json (prompt: auto-bug-fix.md)")
+		if wantsText() {
+			fmt.Println("Kiro agent configured at ~/.kiro/agents/auto-bug-fix.json (prompt: auto-bug-fix.md)")
+		}
 	case "cursor":
 		if err := installer.InstallCursor(home); err != nil {
-			log.Fatalf("setup: install cursor rule: %v", err)
+			failErr("setup: install cursor skill", err)
 		}
-		fmt.Println("Cursor rule installed at ~/.cursor/rules/auto-bug-fix.mdc")
+		if wantsText() {
+			fmt.Println("Cursor skill installed at ~/.cursor/skills/auto-bug-fix/SKILL.md")
+		}
 	case "claude-code":
 		if err := installer.InstallClaudeCode(home); err != nil {
-			log.Fatalf("setup: install claude-code agent: %v", err)
+			failErr("setup: install claude-code agent", err)
 		}
-		fmt.Println("Claude Code agent installed at ~/.claude/agents/auto-bug-fix.md")
+		if wantsText() {
+			fmt.Println("Claude Code agent installed at ~/.claude/agents/auto-bug-fix.md")
+		}
 	case "codex":
 		if err := installer.InstallCodex(home); err != nil {
-			log.Fatalf("setup: install codex AGENTS.md: %v", err)
+			failErr("setup: install codex AGENTS.md", err)
 		}
-		fmt.Println("Codex instructions appended to ~/.codex/AGENTS.md")
+		if wantsText() {
+			fmt.Println("Codex instructions appended to ~/.codex/AGENTS.md")
+		}
 	}
 }
 
@@ -233,23 +337,24 @@ func defaultConfig(agentType string) map[string]any {
 // ── start ────────────────────────────────────────────────────────────────────
 
 func runStart(args []string) {
+	write, args := parseWriteArgs(args)
 	cfgPath := defaultConfigPath()
 	cfgSet := false
 	detach := false
-	asJSON := false
+	confirmedDetachChild := false
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--config":
 			if i+1 >= len(args) {
-				log.Fatalf("start: --config requires a path argument")
+				fail(exitUsage, "E_USAGE", "start: --config requires a path argument", nil, false)
 			}
 			cfgPath = args[i+1]
 			cfgSet = true
 			i++
 		case "--detach", "-d":
 			detach = true
-		case "--json":
-			asJSON = true
+		case "--confirmed-detach-child":
+			confirmedDetachChild = true
 		}
 	}
 
@@ -261,31 +366,38 @@ func runStart(args []string) {
 		}
 	}
 
+	if !confirmedDetachChild {
+		if handleWriteGate(write, "start auto-bug-fix", map[string]any{"configPath": cfgPath, "detach": detach}) {
+			return
+		}
+	}
+
 	// Detached start: re-spawn ourselves in the background and return immediately.
 	if detach {
 		preflight(cfgPath) // fail fast in the foreground; don't background a doomed poller
 		bin, err := os.Executable()
 		if err != nil {
-			log.Fatalf("start: %v", err)
+			failErr("start", err)
 		}
 		childArgs := []string{"start"}
 		if cfgSet {
 			childArgs = append(childArgs, "--config", cfgPath)
 		}
+		childArgs = append(childArgs, "--confirmed-detach-child", "--format", "text")
 		pid, already, err := daemon.StartDetached(bin, defaultPIDPath(), defaultLogPath(), childArgs)
 		if err != nil {
-			log.Fatalf("start: %v", err)
+			failErr("start", err)
 		}
 		if already {
-			if asJSON {
-				printJSON(map[string]any{"started": false, "alreadyRunning": true, "pid": pid, "logPath": defaultLogPath()})
+			if !wantsText() {
+				printJSON(map[string]any{"started": false, "alreadyRunning": true, "pid": pidString(pid), "logPath": defaultLogPath()})
 				return
 			}
 			fmt.Printf("auto-bug-fix poller already running (PID %d)\n", pid)
 			return
 		}
-		if asJSON {
-			printJSON(map[string]any{"started": true, "alreadyRunning": false, "pid": pid, "logPath": defaultLogPath()})
+		if !wantsText() {
+			printJSON(map[string]any{"started": true, "alreadyRunning": false, "pid": pidString(pid), "logPath": defaultLogPath()})
 			return
 		}
 		fmt.Printf("auto-bug-fix poller started (PID %d), logs at %s\n", pid, defaultLogPath())
@@ -302,7 +414,7 @@ func runStart(args []string) {
 	statePath := defaultStatePath()
 	st, err := state.Load(statePath)
 	if err != nil {
-		log.Fatalf("start: %v", err)
+		failErr("start", err)
 	}
 	// Any issue still "triggered" means a previous run was killed mid-fix; make it
 	// retriable so the bug is not silently lost. Safe here: no other poller runs yet.
@@ -366,11 +478,15 @@ func (a *agentTrigger) Trigger(issueKey string) (agent.Result, error) {
 // ── fix ──────────────────────────────────────────────────────────────────────
 
 func runFix(issueKey string, args []string) {
+	write, args := parseWriteArgs(args)
 	cfgPath := defaultConfigPath()
 	for i, a := range args {
 		if a == "--config" && i+1 < len(args) {
 			cfgPath = args[i+1]
 		}
+	}
+	if handleWriteGate(write, "fix jira issue", map[string]any{"issueKey": issueKey, "configPath": cfgPath}) {
+		return
 	}
 
 	cfg := preflight(cfgPath)
@@ -387,19 +503,41 @@ func runFix(issueKey string, args []string) {
 		log.Printf("[auto-bug-fix] Handoff: %s", result.HandoffPath)
 	}
 	if err != nil {
-		log.Fatalf("fix: %v", err)
+		failErr("fix", err)
 	}
 	log.Printf("[auto-bug-fix] Done: %s", issueKey)
+	if !wantsText() {
+		printJSON(fixResultData(issueKey, result))
+	}
+}
+
+// fixResultData builds the fix_result payload. outcome/mrUrl/handoffPath are
+// parsed from the spawned agent's stdout marker (external/agent-controlled), so
+// they are tagged via _untrusted exactly as the reference fix_result schema
+// declares — keeping the self-description honest.
+func fixResultData(issueKey string, result agent.Result) map[string]any {
+	return map[string]any{
+		"issueKey":    issueKey,
+		"outcome":     result.Outcome,
+		"mrUrl":       result.MRURL,
+		"handoffPath": result.HandoffPath,
+		"_untrusted":  []string{"outcome", "mrUrl", "handoffPath"},
+	}
 }
 
 // ── stop / status ─────────────────────────────────────────────────────────────
 
 func runStop(args []string) {
+	write, args := parseWriteArgs(args)
 	running, _, _ := daemon.Status(defaultPIDPath())
-	if err := daemon.Stop(defaultPIDPath()); err != nil {
-		log.Fatalf("stop: %v", err)
+	if handleWriteGate(write, "stop auto-bug-fix", map[string]any{"pidPath": defaultPIDPath(), "wasRunning": running}) {
+		return
 	}
-	if hasFlag(args, "--json") {
+	if err := daemon.Stop(defaultPIDPath()); err != nil {
+		failErr("stop", err)
+	}
+	_ = args
+	if !wantsText() {
 		printJSON(map[string]any{"stopped": true, "wasRunning": running})
 		return
 	}
@@ -407,12 +545,13 @@ func runStop(args []string) {
 }
 
 func runStatus(args []string) {
+	_ = args
 	running, pid, err := daemon.Status(defaultPIDPath())
 	if err != nil {
-		log.Fatalf("status: %v", err)
+		failErr("status", err)
 	}
-	if hasFlag(args, "--json") {
-		printJSON(map[string]any{"running": running, "pid": pid, "logPath": defaultLogPath()})
+	if !wantsText() {
+		printJSON(map[string]any{"running": running, "pid": pidString(pid), "logPath": defaultLogPath()})
 		return
 	}
 	if running {
@@ -434,7 +573,7 @@ func hasFlag(args []string, flag string) bool {
 // ── doctor ────────────────────────────────────────────────────────────────────
 
 // cliProbe runs a sibling CLI and returns stdout even on non-zero exit so its
-// JSON can still be parsed (used by doctor to verify authValid). A timeout keeps
+// JSON can still be parsed (used by doctor to verify sibling CLI health). A timeout keeps
 // a hung CLI from blocking preflight (and thus start/fix) indefinitely.
 func cliProbe(bin string, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -517,6 +656,7 @@ func loadConfig(cfgPath string) (config.Config, error) {
 func preflight(cfgPath string) config.Config {
 	cfg, err := loadConfig(cfgPath)
 	checks := doctor.Run(cfg, err, exec.LookPath, cliProbe, templateProbe, skillProbe)
+	checks = append(checks, versionCheck())
 	failed := doctor.HasFailure(checks)
 	// Surface every non-OK check: FAIL blocks, WARN is a reminder (e.g. an
 	// optional CLI missing) so a passing preflight is never silent about gaps.
@@ -526,51 +666,43 @@ func preflight(cfgPath string) config.Config {
 		}
 	}
 	if failed {
-		log.Fatalf("preflight failed; fix the [FAIL] items above (see `auto-bug-fix doctor`) before continuing")
+		fail(exitConfig, "E_CONFIG", "preflight failed; fix the failed doctor checks before continuing", map[string]any{"checks": doctorJSONChecks(checks)}, false)
 	}
 	return cfg
 }
 
 func runDoctor(args []string) {
 	cfgPath := defaultConfigPath()
-	asJSON := false
 	for i := 0; i < len(args); i++ {
-		switch args[i] {
-		case "--config":
-			if i+1 < len(args) {
-				cfgPath = args[i+1]
-				i++
-			}
-		case "--json":
-			asJSON = true
+		if args[i] == "--config" && i+1 < len(args) {
+			cfgPath = args[i+1]
+			i++
 		}
 	}
 
 	cfg, err := loadConfig(cfgPath)
 
 	checks := doctor.Run(cfg, err, exec.LookPath, cliProbe, templateProbe, skillProbe)
+	checks = append(checks, versionCheck())
+	checks = append(checks, doctor.Check{
+		Name:   "release_readiness",
+		Level:  doctor.Warn,
+		Detail: "beta: functional and mock contract tests are expected; live Jira/GitLab/Kibana smoke evidence is not recorded",
+	})
 	ok := !doctor.HasFailure(checks)
 
-	// Agent-facing: --json emits a parseable result on stdout so the calling
-	// agent can branch programmatically (config.Load env warnings go to stderr).
-	if asJSON {
-		type jcheck struct {
-			Level  string `json:"level"`
-			Name   string `json:"name"`
-			Detail string `json:"detail"`
-		}
-		out := struct {
-			OK     bool     `json:"ok"`
-			Checks []jcheck `json:"checks"`
-		}{OK: ok, Checks: make([]jcheck, 0, len(checks))}
-		for _, c := range checks {
-			out.Checks = append(out.Checks, jcheck{c.Level.String(), c.Name, c.Detail})
-		}
-		b, _ := json.MarshalIndent(out, "", "  ")
-		fmt.Println(string(b))
+	if !wantsText() {
+		out := map[string]any{"checks": doctorJSONChecks(checks), "ok": ok}
 		if !ok {
-			os.Exit(1)
+			printJSONEnvelope(false, nil, &jsonError{
+				Code:      "E_CONFIG",
+				Message:   "one or more required doctor checks failed",
+				Details:   out,
+				Retryable: false,
+			})
+			os.Exit(exitConfig)
 		}
+		printJSON(out)
 		return
 	}
 
@@ -579,7 +711,79 @@ func runDoctor(args []string) {
 	}
 	if !ok {
 		fmt.Println("\nSome required checks failed. Install/authenticate the missing tools, then re-run.")
-		os.Exit(1)
+		os.Exit(exitConfig)
 	}
 	fmt.Println("\nAll required checks passed.")
+}
+
+func versionCheck() doctor.Check {
+	return doctor.Check{
+		Name:   "version",
+		Level:  doctor.OK,
+		Detail: "binary version " + version + " satisfies bundled Skill minimum " + version,
+	}
+}
+
+type doctorJSONCheck struct {
+	Check   string `json:"check"`
+	Status  string `json:"status"`
+	Message string `json:"message"`
+	Fix     string `json:"fix,omitempty"`
+	Level   string `json:"level"`
+	Name    string `json:"name"`
+	Detail  string `json:"detail"`
+}
+
+func doctorJSONChecks(checks []doctor.Check) []doctorJSONCheck {
+	out := make([]doctorJSONCheck, 0, len(checks))
+	for _, c := range checks {
+		out = append(out, doctorJSONCheck{
+			Check:   c.Name,
+			Status:  doctorStatus(c.Level),
+			Message: c.Detail,
+			Fix:     doctorFix(c),
+			Level:   c.Level.String(),
+			Name:    c.Name,
+			Detail:  c.Detail,
+		})
+	}
+	return out
+}
+
+func doctorStatus(level doctor.Level) string {
+	switch level {
+	case doctor.OK:
+		return "pass"
+	case doctor.Info:
+		return "info"
+	case doctor.Warn:
+		return "warn"
+	default:
+		return "fail"
+	}
+}
+
+func doctorFix(c doctor.Check) string {
+	if c.Name == "release_readiness" {
+		return "Record live smoke evidence and raise functional contract coverage before declaring stable."
+	}
+	if c.Level != doctor.Fail {
+		return ""
+	}
+	switch c.Name {
+	case "config":
+		return "Run auto-bug-fix setup or fix the config file."
+	case "jira-cli":
+		return "Run jira-cli doctor and authenticate with jira-cli login."
+	case "gitlab-cli":
+		return "Run gitlab-cli doctor and authenticate with gitlab-cli auth login."
+	case "agent template":
+		return "Run auto-bug-fix setup --agent <type>."
+	case "cli skills":
+		return "Install the required jira-cli and gitlab-cli skills into the configured agent."
+	case "fix scope":
+		return "Set poll.filter.titleContains or poll.filter.assignedToMe to limit the poller scope."
+	default:
+		return c.Detail
+	}
 }

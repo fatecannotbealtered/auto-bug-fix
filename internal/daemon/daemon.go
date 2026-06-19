@@ -59,7 +59,7 @@ func StartDetached(binPath, pidPath, logPath string, args []string) (int, bool, 
 	if err != nil {
 		return 0, false, fmt.Errorf("open log %s: %w", logPath, err)
 	}
-	defer logFile.Close()
+	defer func() { _ = logFile.Close() }()
 
 	cmd := exec.Command(binPath, args...)
 	cmd.Stdout = logFile

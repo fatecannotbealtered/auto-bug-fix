@@ -16,8 +16,9 @@ func readAgentFile(agentType, filename string) (string, error) {
 
 // CLISkill is a sibling-CLI skill the spawned agent must be able to load before
 // driving that CLI. Required mirrors doctor's capability requiredness: the
-// jira-cli/gitlab-cli skills are mandatory; the kibana-cli skill is optional
-// (the workflow only consults Kibana when code-level analysis is inconclusive).
+// jira-cli/gitlab-cli skills are mandatory; the kibana-cli (log evidence) and
+// archery-cli (read-only database-state evidence) skills are optional — the
+// workflow only consults them when code-level analysis is inconclusive.
 type CLISkill struct {
 	Name     string
 	Required bool
@@ -29,6 +30,7 @@ var CLISkills = []CLISkill{
 	{"jira-cli", true},
 	{"gitlab-cli", true},
 	{"kibana-cli", false},
+	{"archery-cli", false},
 }
 
 // SkillsAgentFlag maps our agentType to the `--agent` identifier used by the
@@ -95,7 +97,7 @@ func ArtifactPaths(agentType, home string) []string {
 			filepath.Join(home, ".kiro", "agents", "auto-bug-fix.md"),
 		}
 	case "cursor":
-		return []string{filepath.Join(home, ".cursor", "rules", "auto-bug-fix.mdc")}
+		return []string{filepath.Join(home, ".cursor", "skills", "auto-bug-fix", "SKILL.md")}
 	case "claude-code":
 		return []string{filepath.Join(home, ".claude", "agents", "auto-bug-fix.md")}
 	case "codex":
@@ -162,17 +164,33 @@ func stripFrontmatter(md string) string {
 	return s
 }
 
-// InstallCursor writes the cursor rule to ~/.cursor/rules/auto-bug-fix.mdc.
+// cursorSkillFrontmatter is the SKILL.md header for the Cursor adapter. Cursor
+// auto-loads Agent Skills from the user-level ~/.cursor/skills/ directory, so the
+// workflow is installed as a global skill (see InstallCursor).
+const cursorSkillFrontmatter = `---
+name: auto-bug-fix
+description: Autonomous Jira + GitLab bug-fix execution workflow. Use when fixing a Jira bug end-to-end — read the ticket, locate the GitLab repo, analyse the code, write a targeted fix, run tests, open a merge request, and update Jira.
+---
+
+`
+
+// InstallCursor installs the auto-bug-fix workflow as a global Cursor Agent Skill
+// at ~/.cursor/skills/auto-bug-fix/SKILL.md. Cursor auto-discovers skills from
+// that user-level directory across all projects; a home ~/.cursor/rules/*.mdc is
+// NOT an auto-loaded rules location (only a project's .cursor/rules/ and the
+// Settings UI are), so a skill is the correct global mechanism. The embedded
+// .mdc body is reused with its rule frontmatter replaced by SKILL.md frontmatter.
 func InstallCursor(home string) error {
 	mdc, err := readAgentFile("cursor", "auto-bug-fix.mdc")
 	if err != nil {
 		return err
 	}
-	rulesDir := filepath.Join(home, ".cursor", "rules")
-	if err := os.MkdirAll(rulesDir, 0o755); err != nil {
-		return fmt.Errorf("create cursor rules dir: %w", err)
+	skill := cursorSkillFrontmatter + stripFrontmatter(mdc)
+	skillDir := filepath.Join(home, ".cursor", "skills", "auto-bug-fix")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		return fmt.Errorf("create cursor skill dir: %w", err)
 	}
-	return os.WriteFile(filepath.Join(rulesDir, "auto-bug-fix.mdc"), []byte(mdc), 0o644)
+	return os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(skill), 0o644)
 }
 
 // InstallClaudeCode writes the claude-code agent to ~/.claude/agents/auto-bug-fix.md.
@@ -235,7 +253,11 @@ func InstallCodex(home string) error {
 func AgentCommand(agentType, model string) string {
 	switch agentType {
 	case "kiro":
-		return `kiro-cli chat --no-interactive --trust-all-tools --agent auto-bug-fix "Fix bug {issueKey}"`
+		// Least-privilege headless trust: pre-approve exactly the agent's declared
+		// tools via --trust-tools (canonical names matching the agent JSON) rather
+		// than --trust-all-tools. Fully covers what the agent can do, and avoids the
+		// scripted-startup prompt reported for --trust-all-tools (Kiro #7398).
+		return `kiro-cli chat --no-interactive --trust-tools=fs_read,fs_write,execute_bash,grep,glob --agent auto-bug-fix "Fix bug {issueKey}"`
 	case "cursor":
 		return `cursor-agent` + modelFlag(model) + ` --print --force "Fix bug {issueKey} using the auto-bug-fix workflow"`
 	case "claude-code":

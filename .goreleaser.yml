@@ -21,11 +21,6 @@ builds:
     goarch:
       - amd64
       - arm64
-    # Windows ARM64 is not built natively; the install script falls back to
-    # the amd64 binary which runs via Windows x64 emulation on ARM devices.
-    ignore:
-      - goos: windows
-        goarch: arm64
 
 archives:
   - formats:
@@ -41,3 +36,17 @@ archives:
 
 checksum:
   name_template: checksums.txt
+
+signs:
+  - cmd: cosign
+    artifacts: checksum
+    signature: "${artifact}.sigstore.json"
+    args:
+      - "sign-blob"
+      - "--new-bundle-format"
+      - "--bundle=${signature}"
+      - "${artifact}"
+      - "--yes"
+
+release:
+  replace_existing_artifacts: true

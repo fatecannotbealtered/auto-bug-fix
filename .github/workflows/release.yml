@@ -11,7 +11,6 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        go-version: ['1.24']
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -20,7 +19,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: ${{ matrix.go-version }}
+          go-version-file: go.mod
 
       - name: Tidy modules
         run: go mod tidy
@@ -36,6 +35,10 @@ jobs:
         run: go build -v ./...
 
       - name: Test
+        run: go test -v ./...
+
+      - name: Race test
+        if: runner.os == 'Linux'
         run: go test -race -v ./...
 
       - name: Smoke test (Unix)
@@ -55,6 +58,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      id-token: write
 
     steps:
       - uses: actions/checkout@v6
@@ -64,7 +68,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: "1.24"
+          go-version-file: go.mod
 
       - name: Extract release notes
         run: |
@@ -73,6 +77,9 @@ jobs:
           sed -n "/^## \[${VERSION}\]/,/^## \[/p" CHANGELOG.md | sed '$ { /^## \[/d }' > "$NOTES"
           [ -s "$NOTES" ] || cp CHANGELOG.md "$NOTES"
           echo "NOTES_FILE=$NOTES" >> "$GITHUB_ENV"
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v7
@@ -87,6 +94,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      id-token: write
 
     steps:
       - uses: actions/checkout@v6
@@ -95,9 +103,7 @@ jobs:
         with:
           node-version: "20"
           registry-url: "https://registry.npmjs.org"
-
-      - name: Verify package contents
-        run: npm pack --dry-run
+          always-auth: true
 
       - name: Verify version consistency
         run: |
@@ -107,8 +113,43 @@ jobs:
             echo "::error::Tag version (${TAG_VERSION}) does not match package.json version (${PKG_VERSION})"
             exit 1
           fi
+          node scripts/check-version.js
+
+      - name: Download release archives
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p dist
+          gh release download "${GITHUB_REF_NAME}" --dir dist --pattern "*.tar.gz" --pattern "*.zip"
+          find dist -type f \( -name "*.tar.gz" -o -name "*.zip" \) -print
+
+      - name: Prepare npm platform packages
+        run: node scripts/prepare-npm-platform-packages.js dist npm-platform
+
+      - name: Verify package contents
+        run: npm pack --dry-run
 
       - name: Publish to npm
-        run: npm publish --access public
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION=$(node -p "require('./package.json').version")
+          ROOT_PKG=$(node -p "require('./package.json').name")
+
+          for dir in npm-platform/*; do
+            [ -d "$dir" ] || continue
+            PKG=$(node -p "require('./${dir}/package.json').name")
+            if npm view "${PKG}@${VERSION}" version 2>/dev/null | grep -qx "${VERSION}"; then
+              echo "npm package ${PKG}@${VERSION} already published; skipping"
+              continue
+            fi
+            npm publish "./$dir" --access public --provenance
+          done
+
+          if npm view "${ROOT_PKG}@${VERSION}" version 2>/dev/null | grep -qx "${VERSION}"; then
+            echo "npm package ${ROOT_PKG}@${VERSION} already published; skipping"
+            exit 0
+          fi
+          npm publish --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
