@@ -8,8 +8,10 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -42,18 +44,30 @@ type updateResult struct {
 	NextSteps          []string         `json:"next_steps,omitempty"`
 	Notices            []map[string]any `json:"notices,omitempty"`
 	Preview            map[string]any   `json:"preview,omitempty"`
-	ConfirmToken       string           `json:"confirm_token,omitempty"`
-	ExpiresAt          string           `json:"expires_at,omitempty"`
+	Stage              string           `json:"stage,omitempty"`
+	BinaryReplaced     bool             `json:"binary_replaced"`
 }
 
+// updateStage names a single step of the staged self-update so every failure
+// and the success payload can report exactly how far the update got. For an
+// npm-distributed tool there is no signature/checksum stage: discover -> replace
+// (npm install) -> skill_sync.
+const (
+	stageDiscover  = "discover"
+	stageReplace   = "replace"
+	stageSkillSync = "skill_sync"
+)
+
 func runUpdate(args []string) {
-	write, args := parseWriteArgs(args)
 	checkOnly := false
+	dryRun := false
 	targetVersion := ""
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--check":
 			checkOnly = true
+		case "--dry-run":
+			dryRun = true
 		case "--target-version", "--version":
 			if i+1 >= len(args) {
 				fail(exitUsage, "E_USAGE", "update: "+args[i]+" requires a version", nil, false)
@@ -65,10 +79,12 @@ func runUpdate(args []string) {
 		}
 	}
 
+	// discover stage: resolve the latest (or requested) version.
 	result, err := buildUpdateResult(targetVersion)
 	if err != nil {
-		failErr("update check failed", err)
+		failUpdate(stageDiscover, normalizeVersion(version), false, "not_applicable", err)
 	}
+
 	if checkOnly {
 		result.Status = updateStatus(result)
 		result.Notices = updateNotices(result)
@@ -77,19 +93,9 @@ func runUpdate(args []string) {
 		return
 	}
 
-	detail := map[string]any{
-		"currentVersion":   result.CurrentVersion,
-		"targetVersion":    result.TargetVersion,
-		"installMethod":    result.InstallMethod,
-		"recommended":      result.RecommendedCommand,
-		"skillSyncCommand": result.SkillSyncCommand,
-	}
-	if write.DryRun {
-		expires := time.Now().UTC().Add(confirmTTL)
-		token, err := generateConfirmToken("update auto-bug-fix", detail, expires)
-		if err != nil {
-			failErr("update", err)
-		}
+	// --dry-run is an OPTIONAL read-only preview: no confirm token, no expiry,
+	// and never a required step before a bare `update`.
+	if dryRun {
 		result.Status = "dry_run"
 		result.Preview = map[string]any{
 			"changes": []map[string]any{
@@ -97,41 +103,134 @@ func runUpdate(args []string) {
 				{"action": "skill sync", "command": result.SkillSyncCommand},
 			},
 		}
-		result.ConfirmToken = token
-		result.ExpiresAt = expires.Format(time.RFC3339)
 		printUpdate(result)
 		return
 	}
-	if write.Confirm == "" {
-		fail(exitConfirmNeeded, "E_CONFIRMATION_REQUIRED", "update requires --dry-run followed by --confirm <confirm_token>", nil, false)
+
+	// Idempotent: already on the latest (or requested) version -> no-op success.
+	if !result.UpdateAvailable {
+		result.Status = "up_to_date"
+		result.SkillSyncStatus = "skipped"
+		result.PreviousVersion = result.CurrentVersion
+		printUpdate(result)
+		return
 	}
-	if err := validateConfirmToken("update auto-bug-fix", detail, write.Confirm, time.Now().UTC()); err != nil {
-		fail(exitConflict, "E_CONFLICT", err.Error(), nil, false)
-	}
+
 	if result.InstallMethod != "npm" {
 		fail(exitConfig, "E_CONFIG", "automatic update is supported only for npm installations; run the recommended command manually", map[string]any{"recommended_command": result.RecommendedCommand}, false)
 	}
-	if err := consumeConfirmToken(write.Confirm); err != nil && !activeOutput.Quiet {
-		fmt.Fprintf(os.Stderr, "warning: could not record consumed confirm token: %v\n", err)
+
+	// Trap SIGINT/SIGTERM: on interrupt we still emit a terminal JSON envelope
+	// describing the post-state per the stage invariant, then exit 130 — never a
+	// bare killed process. The context cancels the in-flight npm/npx command.
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	// replace stage: npm install. Everything here leaves the installed package
+	// untouched until npm commits, so binary_replaced stays false on failure.
+	if err := updateRunCommand(ctx, "npm", "install", "-g", updatePackageName+"@"+result.TargetVersion); err != nil {
+		if ctx.Err() != nil {
+			interruptUpdate(stageReplace, result.CurrentVersion, false, "not_started")
+		}
+		failReplace(result, err)
 	}
-	if err := updateRunCommand(context.Background(), "npm", "install", "-g", updatePackageName+"@"+result.TargetVersion); err != nil {
-		fail(exitNetwork, "E_NETWORK", "npm update failed: "+err.Error(), nil, true)
-	}
-	skillStatus := "synced"
-	if err := updateRunCommand(context.Background(), "npx", "skills", "add", updateSkillRepo, "-y", "-g"); err != nil {
-		skillStatus = "failed"
-		result.SkillSyncStatus = skillStatus
-		fail(exitGeneric, "E_RUNTIME", "updated package but failed to sync Skill: "+err.Error(), map[string]any{"skill_sync_command": result.SkillSyncCommand}, false)
-	}
-	result.Status = "updated"
+
+	// Past the atomic commit point: the package is now the new version.
 	result.PreviousVersion = result.CurrentVersion
 	result.CurrentVersion = result.TargetVersion
-	result.SkillSyncStatus = skillStatus
+	result.BinaryReplaced = true
+
+	// skill_sync stage: runs AFTER the replace and is independently replayable.
+	// A failure here is partial success, not a hard error — the package already
+	// updated; the agent just needs to run skill_sync_command.
+	if err := updateRunCommand(ctx, "npx", "skills", "add", updateSkillRepo, "-y", "-g"); err != nil {
+		if ctx.Err() != nil {
+			interruptUpdate(stageSkillSync, result.CurrentVersion, true, "failed")
+		}
+		failSkillSync(result, err)
+	}
+
+	result.Status = "updated"
+	result.SkillSyncStatus = "synced"
+	result.Stage = stageSkillSync
 	result.NextSteps = []string{
 		"run auto-bug-fix changelog --since " + result.PreviousVersion + " --compact",
 		"run auto-bug-fix reference --compact",
 	}
 	printUpdate(result)
+}
+
+// failUpdate emits a staged failure envelope, mapping the discover/download
+// failure onto the taxonomy by its typed error so the agent classifies by
+// error.code, never by the message string. The details always carry the stage
+// invariant fields (stage, current_version, binary_replaced, skill_sync_status).
+func failUpdate(stage, current string, binaryReplaced bool, skillSyncStatus string, err error) {
+	exitCode, code, retryable := exitCodeForError(err)
+	if code == "E_RUNTIME" {
+		// An untyped discover failure is a network probe failure: retryable.
+		code, exitCode, retryable = "E_NETWORK", exitNetwork, true
+	}
+	fail(exitCode, code, "update "+stage+" failed: "+err.Error(), updateFailureDetails(stage, current, binaryReplaced, skillSyncStatus), retryable)
+}
+
+// failReplace classifies a local npm-install failure. A permission failure is
+// E_FORBIDDEN (exit 4); any other local io/disk failure is E_IO (exit 1). These
+// are NON-retryable: they need an environment fix, not a blind retry. The
+// install is atomic, so binary_replaced is false.
+func failReplace(result updateResult, err error) {
+	code := "E_IO"
+	exitCode := exitGeneric
+	msg := "update replace failed (npm install): " + err.Error()
+	if isPermissionError(err) {
+		code = "E_FORBIDDEN"
+		exitCode = exitConfig
+	}
+	fail(exitCode, code, msg, updateFailureDetails(stageReplace, result.CurrentVersion, false, "not_started"), false)
+}
+
+// failSkillSync reports PARTIAL SUCCESS: the package already updated
+// (binary_replaced:true) but the Skill is stale. ok:false with skill_sync_command
+// so the agent knows it is on the new binary and only needs to re-run the sync.
+func failSkillSync(result updateResult, err error) {
+	details := updateFailureDetails(stageSkillSync, result.CurrentVersion, true, "failed")
+	details["previous_version"] = result.PreviousVersion
+	details["skill_sync_command"] = result.SkillSyncCommand
+	fail(exitNetwork, "E_NETWORK", "updated package to "+result.CurrentVersion+" but Skill sync failed; run the skill_sync_command, then changelog --since "+result.PreviousVersion+": "+err.Error(), details, true)
+}
+
+// interruptUpdate emits the terminal envelope for a SIGINT/SIGTERM, stating the
+// real post-state per the interrupted stage, then exits 130. Before the swap:
+// "no change, still on <current>". After the swap during skill_sync: partial
+// success (binary already updated, run the skill_sync_command).
+func interruptUpdate(stage, current string, binaryReplaced bool, skillSyncStatus string) {
+	details := updateFailureDetails(stage, current, binaryReplaced, skillSyncStatus)
+	var msg string
+	if binaryReplaced {
+		details["skill_sync_command"] = updateSkillSyncCommand()
+		msg = "update interrupted during skill_sync; package already updated to " + current + " — run " + updateSkillSyncCommand() + " to finish"
+	} else {
+		msg = "update interrupted before any change; no change, still on " + current
+	}
+	fail(exitInterrupted, "E_INTERRUPTED", msg, details, true)
+}
+
+func updateFailureDetails(stage, current string, binaryReplaced bool, skillSyncStatus string) map[string]any {
+	return map[string]any{
+		"stage":             stage,
+		"current_version":   current,
+		"binary_replaced":   binaryReplaced,
+		"skill_sync_status": skillSyncStatus,
+	}
+}
+
+// isPermissionError reports whether a command failure was a filesystem
+// permission denial, classified by the typed os.ErrPermission / EACCES / EPERM
+// errno rather than by sniffing the message string.
+func isPermissionError(err error) bool {
+	if errors.Is(err, os.ErrPermission) || errors.Is(err, syscall.EACCES) || errors.Is(err, syscall.EPERM) {
+		return true
+	}
+	return false
 }
 
 func buildUpdateResult(targetVersion string) (updateResult, error) {
@@ -240,11 +339,11 @@ func updateNotices(result updateResult) []map[string]any {
 		"current_version":     result.CurrentVersion,
 		"latest_version":      result.TargetVersion,
 		"install_method":      result.InstallMethod,
-		"recommended_command": "auto-bug-fix update --dry-run --compact",
+		"recommended_command": "auto-bug-fix update --compact",
 		"release_url":         "https://github.com/" + updateSkillRepo + "/releases/tag/v" + result.TargetVersion,
 		"checked_at":          time.Now().UTC().Format(time.RFC3339),
 		"next_steps": []string{
-			"ask the user before confirming local self-update",
+			"run auto-bug-fix update --compact",
 			"after update, run auto-bug-fix changelog --since " + result.CurrentVersion + " --compact",
 			"refresh auto-bug-fix reference --compact",
 		},

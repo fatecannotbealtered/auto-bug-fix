@@ -17,6 +17,7 @@ const (
 	exitConfirmNeeded = 5
 	exitConflict      = 6
 	exitNetwork       = 7
+	exitInterrupted   = 130
 )
 
 type outputOptions struct {

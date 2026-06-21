@@ -63,14 +63,27 @@ func TestFixDryRunEmitsConfirmToken(t *testing.T) {
 	}
 }
 
-func TestUpdateDryRunEmitsConfirmToken(t *testing.T) {
+func TestUpdateDryRunIsTokenlessPreview(t *testing.T) {
 	// --target-version skips the network registry lookup so the test is hermetic.
+	// --dry-run is a read-only preview now: it must succeed and must NOT issue a
+	// confirm_token or expires_at (update is no longer a confirm-gated write).
 	stdout, err := runCLIForTest(t, "update", "--dry-run", "--target-version", "9.9.9", "--compact")
 	if err != nil {
 		t.Fatalf("update --dry-run failed: %v\n%s", err, stdout)
 	}
-	if env := parseEnvelope(t, stdout); !env.OK {
+	env := parseEnvelope(t, stdout)
+	if !env.OK {
 		t.Fatalf("update --dry-run should succeed: %+v", env)
+	}
+	data := dataMap(t, env)
+	if _, ok := data["confirm_token"]; ok {
+		t.Fatalf("update --dry-run must NOT issue a confirm_token: %#v", data)
+	}
+	if _, ok := data["expires_at"]; ok {
+		t.Fatalf("update --dry-run must NOT issue an expires_at: %#v", data)
+	}
+	if status, _ := data["status"].(string); status != "dry_run" {
+		t.Fatalf("update --dry-run status should be dry_run: %#v", data)
 	}
 }
 

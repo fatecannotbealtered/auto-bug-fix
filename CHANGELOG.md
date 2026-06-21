@@ -7,6 +7,18 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [1.0.7] - 2026-06-21
+
+### Changed
+
+- **`update` is now a single command with no confirm token.** A bare `auto-bug-fix update` performs the whole self-update in one call — resolve latest (or `--target-version`), update the npm package, then sync the Skill — and is exempt from the `--dry-run → --confirm <token>` write gate (self-update is single-target, non-destructive, and self-verifying; the other data-write commands keep their confirm gate unchanged). `update --check` and `update --dry-run` stay as optional read-only flags; `--dry-run` is now a tokenless preview that issues no `confirm_token`/`expires_at`. `update` is idempotent: already-latest returns `ok` with a no-op result.
+- **Staged update failure/interruption envelope.** Update runs as staged work (`discover → replace → skill_sync`); every failure and the interrupt path now carry `stage`, `current_version`, `binary_replaced`, and `skill_sync_status`. Local `replace` failures are now classified `E_IO` (exit 1) or `E_FORBIDDEN` (exit 4) instead of being misreported as `E_NETWORK`. A Skill-sync failure after a successful package update is now **partial success** (`ok:false`, `binary_replaced:true`, retryable, with `skill_sync_command`) so the agent knows it is on the new binary and only needs to re-run the sync.
+
+### Added
+
+- **SIGINT/SIGTERM trap on `update`.** An interrupted update unwinds to a clean state, cleans up, and still emits a terminal JSON envelope (`E_INTERRUPTED`, exit 130) stating the true post-state (before the swap: "no change, still on <current>"; during skill sync: partial success with `skill_sync_command`).
+- **New error codes `E_IO` (exit 1) and `E_INTERRUPTED` (exit 130)** added to the error/exit mapping and to `reference`.
+
 ## [1.0.6] - 2026-06-19
 
 ### Added

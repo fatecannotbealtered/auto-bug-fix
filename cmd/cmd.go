@@ -25,7 +25,7 @@ import (
 )
 
 // version is overridden at release time via -ldflags "-X .../cmd.version=<tag>".
-var version = "1.0.6"
+var version = "1.0.7"
 
 const schemaVersion = "1.0"
 
@@ -145,7 +145,7 @@ Usage:
   auto-bug-fix context                                            Show local paths and runtime context
   auto-bug-fix reference                                          Describe commands and machine contract
   auto-bug-fix changelog [--since vX.Y.Z]                         Show version changes
-  auto-bug-fix update --check|--dry-run|--confirm <token>          Update package and Skill
+  auto-bug-fix update [--check|--dry-run] [--target-version vX.Y.Z]  Update package and Skill in one call
   auto-bug-fix fix <issueKey> --dry-run|--confirm <token>          Manually trigger a fix
   auto-bug-fix version                                           Print version
 
