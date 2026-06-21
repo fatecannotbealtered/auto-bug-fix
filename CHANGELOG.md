@@ -7,6 +7,13 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [1.0.8] - 2026-06-21
+
+### Added
+
+- **In-process Sigstore signature + checksum verification on the binary self-update path.** A raw-binary install (not managed by npm) now self-updates directly from the signed GitHub release: it resolves the release, downloads the platform archive, `checksums.txt`, and `checksums.txt.sigstore.json`, then verifies the cosign Sigstore signature on `checksums.txt` **in-process** against this repo's tagged release-workflow identity (`…/auto-bug-fix/.github/workflows/release.yml@refs/tags/v*`, OIDC issuer `https://token.actions.githubusercontent.com`) before verifying the archive SHA256, and only then atomically replaces the running binary and syncs the Skill. The trust anchor is sigstore-go's embedded TUF root — there is no external `cosign`, no user-environment dependency, and no skip path. Verification is **fail-closed**: a missing signature bundle, a signature that does not verify, an identity/issuer mismatch, or a checksum mismatch all return `E_INTEGRITY` (exit 1, non-retryable). The signature is always verified **before** the checksum. The success envelope carries `signature_status: "verified"` and `signature_verified: true`; the staged failure/interrupt envelope now includes the `verify_signature` and `verify_checksum` stages.
+- **Raw-binary installs are no longer refused.** `update` previously rejected non-npm installs with `E_CONFIG`; it now routes them to the signed binary path above. npm-managed installs keep the existing `npm install -g` + Skill-sync path unchanged (signature fields stay package-manager managed).
+
 ## [1.0.7] - 2026-06-21
 
 ### Changed

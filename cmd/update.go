@@ -1,15 +1,22 @@
 package cmd
 
 import (
+	"archive/tar"
+	"archive/zip"
+	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -17,13 +24,26 @@ import (
 
 const (
 	updatePackageName = "@fateforge/auto-bug-fix"
-	updateSkillRepo   = "fatecannotbealtered/auto-bug-fix"
+	updateRepo        = "fatecannotbealtered/auto-bug-fix"
+	updateSkillRepo   = updateRepo
+	updateBinaryName  = "auto-bug-fix"
+	updateAPIBaseURL  = "https://api.github.com"
 	updateRegistryURL = "https://registry.npmjs.org/%40fateforge%2Fauto-bug-fix/latest"
 )
 
 var (
-	updateHTTPClient = &http.Client{Timeout: 10 * time.Second}
+	updateHTTPClient = &http.Client{Timeout: 2 * time.Minute}
 	updateRunCommand = runCommand
+	updateGitHubAPI  = updateAPIBaseURL
+	updateNow        = time.Now
+	updatePlatform   = func() (string, string) { return runtime.GOOS, runtime.GOARCH }
+	updateExecutable = os.Executable
+	updateApply      = applyUpdateBinary
+	// Stage seams, overridable in tests so the staged signed-update failure
+	// contract can be exercised without building real signed archives.
+	updateDownloadHook = downloadUpdateFile
+	updateChecksumHook = verifyUpdateChecksum
+	updateExtractHook  = extractUpdateArchive
 )
 
 type updateResult struct {
@@ -46,16 +66,23 @@ type updateResult struct {
 	Preview            map[string]any   `json:"preview,omitempty"`
 	Stage              string           `json:"stage,omitempty"`
 	BinaryReplaced     bool             `json:"binary_replaced"`
+	ReleaseURL         string           `json:"release_url,omitempty"`
+	Path               string           `json:"path,omitempty"`
+	PendingPath        string           `json:"pending_path,omitempty"`
 }
 
 // updateStage names a single step of the staged self-update so every failure
-// and the success payload can report exactly how far the update got. For an
-// npm-distributed tool there is no signature/checksum stage: discover -> replace
-// (npm install) -> skill_sync.
+// and the success payload can report exactly how far the update got. The
+// npm-managed path runs discover -> replace (npm install) -> skill_sync; the
+// raw-binary path runs discover -> download -> verify_signature ->
+// verify_checksum -> replace (atomic swap) -> skill_sync.
 const (
-	stageDiscover  = "discover"
-	stageReplace   = "replace"
-	stageSkillSync = "skill_sync"
+	stageDiscover        = "discover"
+	stageDownload        = "download"
+	stageVerifySignature = "verify_signature"
+	stageVerifyChecksum  = "verify_checksum"
+	stageReplace         = "replace"
+	stageSkillSync       = "skill_sync"
 )
 
 func runUpdate(args []string) {
@@ -97,12 +124,7 @@ func runUpdate(args []string) {
 	// and never a required step before a bare `update`.
 	if dryRun {
 		result.Status = "dry_run"
-		result.Preview = map[string]any{
-			"changes": []map[string]any{
-				{"action": "package manager update", "command": result.RecommendedCommand},
-				{"action": "skill sync", "command": result.SkillSyncCommand},
-			},
-		}
+		result.Preview = updateDryRunPreview(result)
 		printUpdate(result)
 		return
 	}
@@ -116,16 +138,26 @@ func runUpdate(args []string) {
 		return
 	}
 
-	if result.InstallMethod != "npm" {
-		fail(exitConfig, "E_CONFIG", "automatic update is supported only for npm installations; run the recommended command manually", map[string]any{"recommended_command": result.RecommendedCommand}, false)
-	}
-
 	// Trap SIGINT/SIGTERM: on interrupt we still emit a terminal JSON envelope
 	// describing the post-state per the stage invariant, then exit 130 — never a
-	// bare killed process. The context cancels the in-flight npm/npx command.
+	// bare killed process. The context cancels the in-flight command/download.
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	// Route by install method: an npm-managed install (exe under node_modules)
+	// updates via the package manager; a raw binary self-updates from the signed
+	// GitHub release. Raw-binary installs are no longer refused.
+	if result.InstallMethod == "npm" {
+		runUpdateNPM(ctx, result)
+		return
+	}
+	runUpdateBinary(ctx, result)
+}
+
+// runUpdateNPM updates an npm-managed install via `npm install -g` then syncs
+// the Skill. There is no in-process signature/checksum stage here: the package
+// manager owns artifact integrity, so signature fields stay package-managed.
+func runUpdateNPM(ctx context.Context, result updateResult) {
 	// replace stage: npm install. Everything here leaves the installed package
 	// untouched until npm commits, so binary_replaced stays false on failure.
 	if err := updateRunCommand(ctx, "npm", "install", "-g", updatePackageName+"@"+result.TargetVersion); err != nil {
@@ -160,6 +192,130 @@ func runUpdate(args []string) {
 	printUpdate(result)
 }
 
+// runUpdateBinary self-updates a raw binary install from the signed GitHub
+// release: resolve the release, download the platform archive + checksums.txt +
+// checksums.txt.sigstore.json, verify the Sigstore signature on checksums.txt
+// in-process (FIRST), verify the archive SHA256 (SECOND), atomically replace the
+// running binary, then sync the Skill. Signature verification is mandatory and
+// fail-closed: an unsigned, unverifiable, or mismatched release is refused with
+// E_INTEGRITY — there is no skip path.
+func runUpdateBinary(ctx context.Context, result updateResult) {
+	exePath, _ := updateExecutable()
+	if exePath == "" {
+		fail(exitGeneric, "E_IO", "update replace failed: could not determine current executable path",
+			updateFailureDetails(stageReplace, result.CurrentVersion, false, "not_run"), false)
+	}
+
+	rel, err := fetchUpdateRelease(ctx, result.TargetVersion)
+	if err != nil {
+		if ctx.Err() != nil {
+			interruptUpdate(stageDiscover, result.CurrentVersion, false, "not_run")
+		}
+		failUpdate(stageDiscover, result.CurrentVersion, false, "not_run", err)
+	}
+	plan, err := buildUpdatePlan(rel, result.TargetVersion)
+	if err != nil {
+		fail(exitGeneric, "E_NOT_FOUND", "update discover failed: "+err.Error(),
+			updateFailureDetails(stageDiscover, result.CurrentVersion, false, "not_run"), false)
+	}
+	result.ReleaseURL = plan.ReleaseURL
+
+	tmpDir, err := os.MkdirTemp("", "auto-bug-fix-update-*")
+	if err != nil {
+		fail(exitGeneric, "E_IO", "update replace failed (temp dir): "+err.Error(),
+			updateFailureDetails(stageReplace, result.CurrentVersion, false, "not_run"), false)
+	}
+	defer func() { _ = os.RemoveAll(tmpDir) }()
+
+	// download: touches only the temp dir; failure leaves the binary intact.
+	archivePath := filepath.Join(tmpDir, plan.AssetName)
+	if err := updateDownloadHook(ctx, plan.AssetURL, archivePath); err != nil {
+		if ctx.Err() != nil {
+			interruptUpdate(stageDownload, result.CurrentVersion, false, "not_run")
+		}
+		failUpdate(stageDownload, result.CurrentVersion, false, "not_run", err)
+	}
+	checksumPath := filepath.Join(tmpDir, "checksums.txt")
+	if err := updateDownloadHook(ctx, plan.ChecksumURL, checksumPath); err != nil {
+		if ctx.Err() != nil {
+			interruptUpdate(stageDownload, result.CurrentVersion, false, "not_run")
+		}
+		failUpdate(stageDownload, result.CurrentVersion, false, "not_run", err)
+	}
+
+	// verify_signature -> verify_checksum: the Sigstore signature on checksums.txt
+	// is verified FIRST, then the archive checksum. Both fail closed and
+	// non-retryable (E_INTEGRITY): a forged or corrupt release is not a transient
+	// blip an agent should loop on.
+	signatureStatus, err := verifyUpdateChecksumSignature(ctx, checksumPath, plan.SignatureBundleURL, tmpDir)
+	if err != nil {
+		fail(exitGeneric, "E_INTEGRITY", "update verify_signature failed: "+err.Error(),
+			updateFailureDetails(stageVerifySignature, result.CurrentVersion, false, "not_run"), false)
+	}
+	if err := updateChecksumHook(archivePath, checksumPath, plan.AssetName); err != nil {
+		fail(exitGeneric, "E_INTEGRITY", "update verify_checksum failed: "+err.Error(),
+			updateFailureDetails(stageVerifyChecksum, result.CurrentVersion, false, "not_run"), false)
+	}
+
+	// replace: local extract + atomic swap. Failures here are filesystem/permission
+	// problems, not transient — E_IO (exit 1) or E_FORBIDDEN (exit 4).
+	binPath, err := updateExtractHook(archivePath, plan.AssetName, tmpDir)
+	if err != nil {
+		fail(exitGeneric, "E_IO", "update replace failed (extract): "+err.Error(),
+			updateFailureDetails(stageReplace, result.CurrentVersion, false, "not_run"), false)
+	}
+	applied, err := updateApply(binPath, exePath)
+	if err != nil {
+		failBinaryReplace(result, err)
+	}
+
+	// Past the atomic swap point: the binary is now the new version.
+	result.PreviousVersion = result.CurrentVersion
+	result.CurrentVersion = result.TargetVersion
+	result.BinaryReplaced = true
+	result.SignatureStatus = signatureStatus
+	result.SignatureVerified = signatureStatus == "verified"
+	result.ChecksumVerified = true
+	result.Path = applied.Path
+	result.PendingPath = applied.PendingPath
+
+	// skill_sync runs AFTER the swap. A failure here is PARTIAL SUCCESS: the
+	// binary is on the new version, only the Skill is stale.
+	if err := updateRunCommand(ctx, "npx", "skills", "add", updateSkillRepo, "-y", "-g"); err != nil {
+		if ctx.Err() != nil {
+			interruptUpdate(stageSkillSync, result.CurrentVersion, true, "failed")
+		}
+		failSkillSync(result, err)
+	}
+
+	result.Status = applied.Status
+	result.SkillSyncStatus = "synced"
+	result.Stage = stageSkillSync
+	result.NextSteps = []string{
+		"run auto-bug-fix changelog --since " + result.PreviousVersion + " --compact",
+		"run auto-bug-fix reference --compact",
+	}
+	printUpdate(result)
+}
+
+func updateDryRunPreview(result updateResult) map[string]any {
+	if result.InstallMethod == "npm" {
+		return map[string]any{
+			"changes": []map[string]any{
+				{"action": "package manager update", "command": result.RecommendedCommand},
+				{"action": "skill sync", "command": result.SkillSyncCommand},
+			},
+		}
+	}
+	return map[string]any{
+		"changes": []map[string]any{
+			{"action": "replace binary", "currentVersion": result.CurrentVersion, "targetVersion": result.TargetVersion},
+			{"action": "skill sync", "command": result.SkillSyncCommand},
+		},
+		"verification": []string{"verify_signature", "verify_checksum"},
+	}
+}
+
 // failUpdate emits a staged failure envelope, mapping the discover/download
 // failure onto the taxonomy by its typed error so the agent classifies by
 // error.code, never by the message string. The details always carry the stage
@@ -167,7 +323,7 @@ func runUpdate(args []string) {
 func failUpdate(stage, current string, binaryReplaced bool, skillSyncStatus string, err error) {
 	exitCode, code, retryable := exitCodeForError(err)
 	if code == "E_RUNTIME" {
-		// An untyped discover failure is a network probe failure: retryable.
+		// An untyped discover/download failure is a network probe failure: retryable.
 		code, exitCode, retryable = "E_NETWORK", exitNetwork, true
 	}
 	fail(exitCode, code, "update "+stage+" failed: "+err.Error(), updateFailureDetails(stage, current, binaryReplaced, skillSyncStatus), retryable)
@@ -188,14 +344,28 @@ func failReplace(result updateResult, err error) {
 	fail(exitCode, code, msg, updateFailureDetails(stageReplace, result.CurrentVersion, false, "not_started"), false)
 }
 
-// failSkillSync reports PARTIAL SUCCESS: the package already updated
+// failBinaryReplace classifies a raw-binary atomic-swap failure: a permission
+// error needs an environment fix (E_FORBIDDEN, exit 4), any other filesystem
+// failure is E_IO (exit 1). Neither is retryable; binary_replaced is false.
+func failBinaryReplace(result updateResult, err error) {
+	code := "E_IO"
+	exitCode := exitGeneric
+	if isPermissionError(err) {
+		code = "E_FORBIDDEN"
+		exitCode = exitConfig
+	}
+	fail(exitCode, code, "update replace failed (install binary): "+err.Error(),
+		updateFailureDetails(stageReplace, result.CurrentVersion, false, "not_run"), false)
+}
+
+// failSkillSync reports PARTIAL SUCCESS: the binary/package already updated
 // (binary_replaced:true) but the Skill is stale. ok:false with skill_sync_command
 // so the agent knows it is on the new binary and only needs to re-run the sync.
 func failSkillSync(result updateResult, err error) {
 	details := updateFailureDetails(stageSkillSync, result.CurrentVersion, true, "failed")
 	details["previous_version"] = result.PreviousVersion
 	details["skill_sync_command"] = result.SkillSyncCommand
-	fail(exitNetwork, "E_NETWORK", "updated package to "+result.CurrentVersion+" but Skill sync failed; run the skill_sync_command, then changelog --since "+result.PreviousVersion+": "+err.Error(), details, true)
+	fail(exitNetwork, "E_NETWORK", "updated to "+result.CurrentVersion+" but Skill sync failed; run the skill_sync_command, then changelog --since "+result.PreviousVersion+": "+err.Error(), details, true)
 }
 
 // interruptUpdate emits the terminal envelope for a SIGINT/SIGTERM, stating the
@@ -207,7 +377,7 @@ func interruptUpdate(stage, current string, binaryReplaced bool, skillSyncStatus
 	var msg string
 	if binaryReplaced {
 		details["skill_sync_command"] = updateSkillSyncCommand()
-		msg = "update interrupted during skill_sync; package already updated to " + current + " — run " + updateSkillSyncCommand() + " to finish"
+		msg = "update interrupted during skill_sync; already updated to " + current + " — run " + updateSkillSyncCommand() + " to finish"
 	} else {
 		msg = "update interrupted before any change; no change, still on " + current
 	}
@@ -237,14 +407,15 @@ func buildUpdateResult(targetVersion string) (updateResult, error) {
 	latest := targetVersion
 	status := ""
 	message := ""
+	method := installMethod()
 	if latest == "" {
-		v, err := fetchLatestNPMVersion(context.Background())
+		v, err := fetchLatestVersion(context.Background(), method)
 		if err != nil {
 			var httpErr *updateHTTPError
 			if errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusNotFound {
 				latest = normalizeVersion(version)
 				status = "not_published"
-				message = "npm package is not published yet; no registry update is available"
+				message = "no published release is available; no update is available"
 			} else {
 				return updateResult{}, err
 			}
@@ -253,6 +424,12 @@ func buildUpdateResult(targetVersion string) (updateResult, error) {
 		}
 	}
 	current := normalizeVersion(version)
+	signatureStatus := "not_applicable_package_manager"
+	if method != "npm" {
+		// A raw binary verifies the signature in-process during the update; until
+		// then it is simply not yet checked (not "not applicable").
+		signatureStatus = "not_checked"
+	}
 	result := updateResult{
 		Status:             status,
 		Message:            message,
@@ -260,14 +437,32 @@ func buildUpdateResult(targetVersion string) (updateResult, error) {
 		LatestVersion:      latest,
 		TargetVersion:      latest,
 		UpdateAvailable:    compareVersions(latest, current) > 0 || (targetVersion != "" && compareVersions(latest, current) != 0),
-		InstallMethod:      installMethod(),
+		InstallMethod:      method,
 		RecommendedCommand: "npm install -g " + updatePackageName + "@" + latest,
 		SkillSyncCommand:   updateSkillSyncCommand(),
-		SignatureStatus:    "not_applicable_package_manager",
+		SignatureStatus:    signatureStatus,
 		SignatureVerified:  false,
 		ChecksumVerified:   false,
 	}
 	return result, nil
+}
+
+// fetchLatestVersion resolves the newest published version for the install
+// method: the npm registry for an npm-managed install, the GitHub latest-release
+// tag for a raw binary (whose updates come from signed GitHub artifacts).
+func fetchLatestVersion(ctx context.Context, method string) (string, error) {
+	if method == "npm" {
+		return fetchLatestNPMVersion(ctx)
+	}
+	rel, err := fetchUpdateRelease(ctx, "")
+	if err != nil {
+		return "", err
+	}
+	tag := normalizeVersion(rel.TagName)
+	if tag == "" {
+		return "", fmt.Errorf("latest release is missing tag_name")
+	}
+	return tag, nil
 }
 
 func fetchLatestNPMVersion(ctx context.Context) (string, error) {
@@ -302,7 +497,7 @@ type updateHTTPError struct {
 }
 
 func (e *updateHTTPError) Error() string {
-	return fmt.Sprintf("npm registry returned HTTP %d", e.StatusCode)
+	return fmt.Sprintf("registry returned HTTP %d", e.StatusCode)
 }
 
 func updateStatus(result updateResult) string {
@@ -315,15 +510,55 @@ func updateStatus(result updateResult) string {
 	return "up_to_date"
 }
 
+// installMethod detects how this binary was installed so update can route to the
+// package-manager path (npm) or the signed raw-binary path. The
+// AUTO_BUG_FIX_INSTALL_METHOD env var forces a method (used by tests).
 func installMethod() string {
 	if v := strings.TrimSpace(os.Getenv("AUTO_BUG_FIX_INSTALL_METHOD")); v != "" {
 		return v
 	}
-	exe, _ := os.Executable()
-	if strings.Contains(strings.ToLower(exe), "node_modules") {
+	exe, _ := updateExecutable()
+	return detectInstallMethod(exe)
+}
+
+// detectInstallMethod returns "npm" when the executable lives under a
+// node_modules tree whose package.json matches this package, otherwise "binary".
+func detectInstallMethod(exe string) string {
+	exe = filepath.Clean(exe)
+	if exe != "" && pathHasSegment(exe, "node_modules") && npmPackageRoot(exe) != "" {
 		return "npm"
 	}
-	return "npm"
+	return "binary"
+}
+
+func pathHasSegment(path, segment string) bool {
+	for _, part := range strings.FieldsFunc(filepath.Clean(path), func(r rune) bool {
+		return r == os.PathSeparator || r == '/' || r == '\\'
+	}) {
+		if part == segment {
+			return true
+		}
+	}
+	return false
+}
+
+func npmPackageRoot(exe string) string {
+	for dir := filepath.Dir(exe); dir != "." && dir != string(filepath.Separator); dir = filepath.Dir(dir) {
+		data, err := os.ReadFile(filepath.Join(dir, "package.json"))
+		if err == nil {
+			var pkg struct {
+				Name string `json:"name"`
+			}
+			if json.Unmarshal(data, &pkg) == nil && pkg.Name == updatePackageName {
+				return dir
+			}
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+	}
+	return ""
 }
 
 func updateSkillSyncCommand() string {
@@ -416,7 +651,10 @@ func printUpdate(result updateResult) {
 }
 
 func normalizeVersion(v string) string {
-	return strings.TrimPrefix(strings.TrimSpace(v), "v")
+	v = strings.TrimSpace(v)
+	v = strings.TrimPrefix(v, "refs/tags/")
+	v = strings.TrimPrefix(v, "v")
+	return v
 }
 
 func runCommand(ctx context.Context, name string, args ...string) error {
@@ -424,4 +662,425 @@ func runCommand(ctx context.Context, name string, args ...string) error {
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
+}
+
+// ── signed binary-update plan + transport ─────────────────────────────────────
+
+type updateReleaseAsset struct {
+	Name               string `json:"name"`
+	BrowserDownloadURL string `json:"browser_download_url"`
+}
+
+type updateRelease struct {
+	TagName string               `json:"tag_name"`
+	HTMLURL string               `json:"html_url"`
+	Assets  []updateReleaseAsset `json:"assets"`
+}
+
+type updatePlan struct {
+	TargetVersion      string
+	ReleaseURL         string
+	AssetName          string
+	AssetURL           string
+	ChecksumURL        string
+	SignatureBundleURL string
+}
+
+type updateApplyResult struct {
+	Status      string
+	Path        string
+	PendingPath string
+}
+
+func fetchUpdateRelease(ctx context.Context, targetVersion string) (*updateRelease, error) {
+	url := updateReleaseURL(updateRepo, targetVersion)
+	data, err := updateHTTPGet(ctx, url)
+	if err != nil {
+		return nil, err
+	}
+	var rel updateRelease
+	if err := json.Unmarshal(data, &rel); err != nil {
+		return nil, fmt.Errorf("parsing release JSON: %w", err)
+	}
+	return &rel, nil
+}
+
+func updateReleaseURL(repo, targetVersion string) string {
+	base := strings.TrimRight(updateGitHubAPI, "/")
+	if strings.TrimSpace(targetVersion) != "" {
+		return base + "/repos/" + repo + "/releases/tags/" + canonicalVersionTag(targetVersion)
+	}
+	return base + "/repos/" + repo + "/releases/latest"
+}
+
+func canonicalVersionTag(v string) string {
+	v = strings.TrimSpace(v)
+	if strings.HasPrefix(v, "v") {
+		return v
+	}
+	return "v" + v
+}
+
+func buildUpdatePlan(rel *updateRelease, targetVersion string) (updatePlan, error) {
+	if rel == nil {
+		return updatePlan{}, errors.New("empty release response")
+	}
+	target := normalizeVersion(rel.TagName)
+	if target == "" {
+		target = normalizeVersion(targetVersion)
+	}
+	if target == "" {
+		return updatePlan{}, errors.New("release is missing tag_name")
+	}
+	assetName, err := updateArchiveName(target)
+	if err != nil {
+		return updatePlan{}, err
+	}
+	assetURL := findUpdateAssetURL(rel.Assets, assetName)
+	if assetURL == "" {
+		return updatePlan{}, fmt.Errorf("release %s does not include asset %s", rel.TagName, assetName)
+	}
+	checksumURL := findUpdateAssetURL(rel.Assets, "checksums.txt")
+	if checksumURL == "" {
+		return updatePlan{}, fmt.Errorf("release %s does not include checksums.txt", rel.TagName)
+	}
+	signatureBundleURL := findUpdateAssetURL(rel.Assets, "checksums.txt.sigstore.json")
+	return updatePlan{
+		TargetVersion:      target,
+		ReleaseURL:         rel.HTMLURL,
+		AssetName:          assetName,
+		AssetURL:           assetURL,
+		ChecksumURL:        checksumURL,
+		SignatureBundleURL: signatureBundleURL,
+	}, nil
+}
+
+func updateArchiveName(ver string) (string, error) {
+	goos, goarch := updatePlatform()
+	platform, ok := map[string]string{
+		"darwin":  "darwin",
+		"linux":   "linux",
+		"windows": "windows",
+	}[goos]
+	if !ok {
+		return "", fmt.Errorf("unsupported update platform: %s-%s", goos, goarch)
+	}
+	arch, ok := map[string]string{
+		"amd64": "amd64",
+		"arm64": "arm64",
+	}[goarch]
+	if !ok {
+		return "", fmt.Errorf("unsupported update platform: %s-%s", goos, goarch)
+	}
+	ext := ".tar.gz"
+	if goos == "windows" {
+		ext = ".zip"
+	}
+	return fmt.Sprintf("%s-%s-%s-%s%s", updateBinaryName, normalizeVersion(ver), platform, arch, ext), nil
+}
+
+func findUpdateAssetURL(assets []updateReleaseAsset, name string) string {
+	for _, asset := range assets {
+		if asset.Name == name {
+			return asset.BrowserDownloadURL
+		}
+	}
+	return ""
+}
+
+func updateHTTPGet(ctx context.Context, url string) ([]byte, error) {
+	req, err := newUpdateRequest(ctx, url, "application/json")
+	if err != nil {
+		return nil, err
+	}
+	resp, err := updateHTTPClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("executing request: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	data, readErr := io.ReadAll(resp.Body)
+	if readErr != nil {
+		return nil, fmt.Errorf("reading response: %w", readErr)
+	}
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, &updateHTTPError{StatusCode: resp.StatusCode}
+	}
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("GET %s returned %d: %s", url, resp.StatusCode, truncateForError(string(data), 200))
+	}
+	return data, nil
+}
+
+func downloadUpdateFile(ctx context.Context, url, dest string) error {
+	req, err := newUpdateRequest(ctx, url, "application/octet-stream")
+	if err != nil {
+		return err
+	}
+	resp, err := updateHTTPClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("executing request: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode >= 400 {
+		data, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("GET %s returned %d: %s", url, resp.StatusCode, truncateForError(string(data), 200))
+	}
+	tmp := dest + ".part"
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(f, resp.Body); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, dest); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
+}
+
+func newUpdateRequest(ctx context.Context, url, accept string) (*http.Request, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("creating request: %w", err)
+	}
+	req.Header.Set("Accept", accept)
+	req.Header.Set("User-Agent", "auto-bug-fix")
+	if tok := strings.TrimSpace(os.Getenv("GITHUB_TOKEN")); tok != "" {
+		req.Header.Set("Authorization", "Bearer "+tok)
+	}
+	return req, nil
+}
+
+func verifyUpdateChecksum(archivePath, checksumPath, assetName string) error {
+	checksumData, err := os.ReadFile(checksumPath)
+	if err != nil {
+		return fmt.Errorf("reading checksums: %w", err)
+	}
+	expected := ""
+	for _, line := range strings.Split(string(checksumData), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		if filepath.Base(fields[len(fields)-1]) == assetName {
+			expected = strings.ToLower(fields[0])
+			break
+		}
+	}
+	if expected == "" {
+		return fmt.Errorf("checksum for %s not found", assetName)
+	}
+	f, err := os.Open(archivePath)
+	if err != nil {
+		return fmt.Errorf("reading archive: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+	hash := sha256.New()
+	if _, err := io.Copy(hash, f); err != nil {
+		return fmt.Errorf("hashing archive: %w", err)
+	}
+	actual := hex.EncodeToString(hash.Sum(nil))
+	if actual != expected {
+		return fmt.Errorf("checksum mismatch for %s", assetName)
+	}
+	return nil
+}
+
+// verifyUpdateChecksumSignature enforces a mandatory, in-process Sigstore
+// signature check on checksums.txt before the release is trusted. There is no
+// skip path: a release without a signature bundle, or one whose signature does
+// not verify against this repo's release-workflow identity, is refused. The
+// returned status is always "verified" on the nil-error path.
+func verifyUpdateChecksumSignature(ctx context.Context, checksumPath, bundleURL, tmpDir string) (string, error) {
+	if strings.TrimSpace(bundleURL) == "" {
+		return "missing", errors.New("release does not include checksums.txt.sigstore.json; refusing to install an unsigned release")
+	}
+	bundlePath := filepath.Join(tmpDir, "checksums.txt.sigstore.json")
+	if err := updateDownloadHook(ctx, bundleURL, bundlePath); err != nil {
+		return "download_failed", fmt.Errorf("downloading checksum signature bundle: %w", err)
+	}
+	if err := updateVerifySignature(checksumPath, bundlePath, updateSignerIdentityRegexp()); err != nil {
+		return "failed", err
+	}
+	return "verified", nil
+}
+
+func extractUpdateArchive(archivePath, assetName, tmpDir string) (string, error) {
+	if strings.HasSuffix(assetName, ".zip") {
+		return extractUpdateZip(archivePath, tmpDir)
+	}
+	if strings.HasSuffix(assetName, ".tar.gz") {
+		return extractUpdateTarGz(archivePath, tmpDir)
+	}
+	return "", fmt.Errorf("unsupported archive type: %s", assetName)
+}
+
+func extractUpdateZip(archivePath, tmpDir string) (string, error) {
+	zr, err := zip.OpenReader(archivePath)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = zr.Close() }()
+	want := updateArchiveBinaryName()
+	for _, f := range zr.File {
+		if filepath.Base(f.Name) != want {
+			continue
+		}
+		rc, err := f.Open()
+		if err != nil {
+			return "", err
+		}
+		defer func() { _ = rc.Close() }()
+		return writeExtractedUpdateBinary(tmpDir, want, rc)
+	}
+	return "", fmt.Errorf("%s not found in archive", want)
+}
+
+func extractUpdateTarGz(archivePath, tmpDir string) (string, error) {
+	f, err := os.Open(archivePath)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = f.Close() }()
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = gz.Close() }()
+	tr := tar.NewReader(gz)
+	want := updateArchiveBinaryName()
+	for {
+		hdr, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return "", err
+		}
+		if hdr.Typeflag != tar.TypeReg || filepath.Base(hdr.Name) != want {
+			continue
+		}
+		return writeExtractedUpdateBinary(tmpDir, want, tr)
+	}
+	return "", fmt.Errorf("%s not found in archive", want)
+}
+
+func updateArchiveBinaryName() string {
+	goos, _ := updatePlatform()
+	if goos == "windows" {
+		return updateBinaryName + ".exe"
+	}
+	return updateBinaryName
+}
+
+func writeExtractedUpdateBinary(tmpDir, name string, r io.Reader) (string, error) {
+	outDir := filepath.Join(tmpDir, "extracted")
+	if err := os.MkdirAll(outDir, 0o700); err != nil {
+		return "", err
+	}
+	outPath := filepath.Join(outDir, name)
+	f, err := os.OpenFile(outPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o700)
+	if err != nil {
+		return "", err
+	}
+	if _, err := io.Copy(f, r); err != nil {
+		_ = f.Close()
+		return "", err
+	}
+	if err := f.Close(); err != nil {
+		return "", err
+	}
+	return outPath, nil
+}
+
+func applyUpdateBinary(src, dst string) (updateApplyResult, error) {
+	if runtime.GOOS == "windows" {
+		return scheduleWindowsBinaryReplace(src, dst)
+	}
+	mode := os.FileMode(0o755)
+	if st, err := os.Stat(dst); err == nil {
+		mode = st.Mode().Perm()
+		if mode&0o111 == 0 {
+			mode |= 0o755
+		}
+	}
+	tmpName := fmt.Sprintf(".%s.update-%d", filepath.Base(dst), updateNow().UnixNano())
+	tmpPath := filepath.Join(filepath.Dir(dst), tmpName)
+	if err := copyFile(src, tmpPath, mode); err != nil {
+		return updateApplyResult{}, err
+	}
+	if err := os.Rename(tmpPath, dst); err != nil {
+		_ = os.Remove(tmpPath)
+		return updateApplyResult{}, err
+	}
+	return updateApplyResult{Status: "installed", Path: dst}, nil
+}
+
+func scheduleWindowsBinaryReplace(src, dst string) (updateApplyResult, error) {
+	pending := dst + ".new"
+	if err := copyFile(src, pending, 0o755); err != nil {
+		return updateApplyResult{}, err
+	}
+	scriptPath := filepath.Join(os.TempDir(), fmt.Sprintf("auto-bug-fix-update-%d.cmd", updateNow().UnixNano()))
+	script := strings.Join([]string{
+		"@echo off",
+		"setlocal",
+		"set \"PENDING=" + batchEscape(pending) + "\"",
+		"set \"TARGET=" + batchEscape(dst) + "\"",
+		"for /L %%I in (1,1,30) do (",
+		"  move /Y \"%PENDING%\" \"%TARGET%\" > nul 2>&1",
+		"  if not exist \"%PENDING%\" goto done",
+		"  ping 127.0.0.1 -n 2 > nul",
+		")",
+		":done",
+		"del \"%~f0\" > nul 2>&1",
+		"",
+	}, "\r\n")
+	if err := os.WriteFile(scriptPath, []byte(script), 0o600); err != nil {
+		return updateApplyResult{}, err
+	}
+	if err := exec.Command("cmd", "/C", "start", "", "/B", scriptPath).Start(); err != nil {
+		return updateApplyResult{}, err
+	}
+	return updateApplyResult{Status: "scheduled", Path: dst, PendingPath: pending}, nil
+}
+
+func copyFile(src, dst string, mode os.FileMode) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = in.Close() }()
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		_ = out.Close()
+		return err
+	}
+	if err := out.Close(); err != nil {
+		return err
+	}
+	return os.Chmod(dst, mode)
+}
+
+func truncateForError(s string, n int) string {
+	s = strings.TrimSpace(s)
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "..."
+}
+
+func batchEscape(s string) string {
+	return strings.ReplaceAll(s, "%", "%%")
 }

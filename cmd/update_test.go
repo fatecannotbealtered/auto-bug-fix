@@ -14,10 +14,12 @@ import (
 
 // captureUpdate runs fn (a non-exiting update path) with a controllable command
 // runner and a fixed compact JSON output, returning the parsed envelope written
-// to stdout. Paths that call fail() (os.Exit) are covered by the subprocess
-// tests below, not here.
+// to stdout. The install method is pinned to npm so the routed path is the
+// package-manager path (the signed binary path is covered by its own seams).
+// Paths that call fail() (os.Exit) are covered by the subprocess tests below.
 func captureUpdate(t *testing.T, runner func(ctx context.Context, name string, args ...string) error, fn func()) jsonEnvelope {
 	t.Helper()
+	t.Setenv("AUTO_BUG_FIX_INSTALL_METHOD", "npm")
 	origRunner := updateRunCommand
 	origOut := activeOutput
 	updateRunCommand = runner
@@ -117,6 +119,28 @@ func TestIsPermissionError(t *testing.T) {
 	}
 }
 
+// TestDetectInstallMethodBinary: a path that is not under a matching node_modules
+// tree resolves to the raw-binary path, which now self-updates from the signed
+// release instead of being refused.
+func TestDetectInstallMethodBinary(t *testing.T) {
+	if m := detectInstallMethod("/usr/local/bin/auto-bug-fix"); m != "binary" {
+		t.Fatalf("a raw binary path must detect as binary, got %q", m)
+	}
+}
+
+// TestSignerIdentityRegexpPinsThisRepo: the SAN policy is anchored to this repo's
+// tagged release workflow and the GitHub Actions OIDC issuer — nothing looser.
+func TestSignerIdentityRegexpPinsThisRepo(t *testing.T) {
+	got := updateSignerIdentityRegexp()
+	want := `^https://github\.com/fatecannotbealtered/auto-bug-fix/\.github/workflows/release\.yml@refs/tags/v.*$`
+	if got != want {
+		t.Fatalf("signer identity regexp drifted:\n got: %s\nwant: %s", got, want)
+	}
+	if updateOIDCIssuer != "https://token.actions.githubusercontent.com" {
+		t.Fatalf("OIDC issuer must be GitHub Actions, got %q", updateOIDCIssuer)
+	}
+}
+
 // --- subprocess tests for paths that exit via fail() ---
 
 // TestUpdateSkillSyncPartialSuccess: npm succeeds, npx fails -> partial success
@@ -163,13 +187,15 @@ func TestUpdateReplaceFailureIsE_IO(t *testing.T) {
 }
 
 // runUpdateSubprocess re-executes this test binary with an env hook that swaps
-// updateRunCommand for a scripted failure, captures stdout + exit code.
+// updateRunCommand for a scripted failure, captures stdout + exit code. The npm
+// method is pinned so the routed path is the package-manager path.
 func runUpdateSubprocess(t *testing.T, mode string, args ...string) (jsonEnvelope, int) {
 	t.Helper()
 	cmd := exec.Command(os.Args[0], "-test.run", "TestUpdateSubprocessHook") //nolint:gosec
 	cmd.Env = append(os.Environ(),
 		"AUTO_BUG_FIX_TEST_UPDATE_HOOK="+mode,
 		"AUTO_BUG_FIX_TEST_UPDATE_ARGS="+strings.Join(args, " "),
+		"AUTO_BUG_FIX_INSTALL_METHOD=npm",
 	)
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout

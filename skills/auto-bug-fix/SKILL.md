@@ -1,10 +1,10 @@
 ---
 name: auto-bug-fix
-version: 1.0.7
+version: 1.0.8
 description: "auto-bug-fix CLI for AI Agents operating an autonomous Jira Bug fix scheduler. Use for installing, configuring, preflighting, starting, stopping, updating, and auditing the scheduler; not for performing the per-ticket code repair directly."
 license: MIT
 user-invocable: true
-metadata: {"requires":{"bins":["auto-bug-fix"],"min_version":"1.0.7"}}
+metadata: {"requires":{"bins":["auto-bug-fix"],"min_version":"1.0.8"}}
 ---
 
 # auto-bug-fix
@@ -162,7 +162,9 @@ If a dependency CLI behavior is unclear, read that CLI's `reference --compact`; 
 
 ## Self-Update
 
-`update` is a **single command, not a confirm-gated write**. A bare `auto-bug-fix update` performs the whole self-update in one call — resolve the latest (or `--target-version`), update the npm package, then sync the Skill. There is no confirm token. `--check` and `--dry-run` are optional read-only flags; `update` is idempotent (already-latest returns `ok` with a no-op).
+`update` is a **single command, not a confirm-gated write**. A bare `auto-bug-fix update` performs the whole self-update in one call — resolve the latest (or `--target-version`), update the binary/package, then sync the Skill. There is no confirm token. `--check` and `--dry-run` are optional read-only flags; `update` is idempotent (already-latest returns `ok` with a no-op).
+
+`update` routes by install method. An **npm-managed** install (binary under `node_modules`) updates via `npm install -g`; integrity is owned by the package manager (`signature_status: not_applicable_package_manager`). A **raw binary** self-updates from the signed GitHub release: it downloads the platform archive, `checksums.txt`, and `checksums.txt.sigstore.json`, verifies the cosign **Sigstore signature on `checksums.txt` in-process** (against this repo's tagged release-workflow identity, using sigstore-go's embedded TUF trust root — no external `cosign`, no user-environment dependency) **before** verifying the archive SHA256, then atomically replaces the running binary. Verification is **fail-closed**: a missing bundle, a signature that does not verify, an identity/issuer mismatch, or a checksum mismatch all abort with `E_INTEGRITY` (exit 1, non-retryable) — there is no "verify failed, proceed anyway" path. On success the result carries `signature_status: "verified"` and `signature_verified: true`; the staged failure envelope adds `verify_signature` and `verify_checksum` stages.
 
 Use the update flow when the user asks to update, when the Skill minimum version is higher than the binary, or when `update --check` reports an update:
 
