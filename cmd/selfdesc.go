@@ -108,6 +108,8 @@ func runReference(args []string) {
 			"json_envelope":  true,
 			"stdout":         "json mode emits one JSON envelope on stdout; logs and warnings go to stderr",
 			"global_flags":   []string{"--format json|text|raw", "--json", "--compact", "--fields <a,b>", "--dry-run", "--confirm <token>", "--quiet"},
+			"meta_fields":    []string{"duration_ms", "notices"},
+			"meta_notices":   "meta.notices (omitempty) carries the cached update-available notice on every command, read-only from the local update cache (no network); severity-graded (warning when the changelog delta has a security entry or a major bump, else info)",
 		},
 		"release_readiness": releaseReadiness(),
 		"commands":          referenceCommands(),

@@ -571,6 +571,7 @@ func updateNotices(result updateResult) []map[string]any {
 	}
 	return []map[string]any{{
 		"type":                "update_available",
+		"severity":            updateNoticeSeverity(result.CurrentVersion, result.TargetVersion),
 		"current_version":     result.CurrentVersion,
 		"latest_version":      result.TargetVersion,
 		"install_method":      result.InstallMethod,
@@ -583,6 +584,30 @@ func updateNotices(result updateResult) []map[string]any {
 			"refresh auto-bug-fix reference --compact",
 		},
 	}}
+}
+
+// updateNoticeSeverity grades the update notice from the embedded CHANGELOG
+// delta between the running version and the latest, computed at check time and
+// stored in the cache (CLI-SPEC §14). It returns "warning" when the delta
+// contains a security entry OR the latest crosses a major version (likely
+// security-relevant or breaking), and "info" otherwise. "critical" is reserved
+// and never derived from the changelog delta.
+func updateNoticeSeverity(current, latest string) string {
+	if versionParts(latest)[0] > versionParts(current)[0] {
+		return "warning"
+	}
+	for _, e := range parseChangelog(changelogMarkdown) {
+		if strings.EqualFold(e.Version, "Unreleased") {
+			continue
+		}
+		if compareVersions(e.Version, current) <= 0 {
+			continue
+		}
+		if len(e.Changes["security"]) > 0 {
+			return "warning"
+		}
+	}
+	return "info"
 }
 
 // updateCachePath is the local, user-scoped cache that `update --check` writes

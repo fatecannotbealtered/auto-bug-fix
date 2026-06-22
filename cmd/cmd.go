@@ -25,7 +25,7 @@ import (
 )
 
 // version is overridden at release time via -ldflags "-X .../cmd.version=<tag>".
-var version = "1.0.8"
+var version = "1.0.9"
 
 const schemaVersion = "1.0"
 
@@ -40,11 +40,11 @@ func SetChangelog(markdown string) {
 }
 
 type jsonEnvelope struct {
-	OK            bool             `json:"ok"`
-	SchemaVersion string           `json:"schema_version"`
-	Data          any              `json:"data,omitempty"`
-	Error         *jsonError       `json:"error,omitempty"`
-	Meta          map[string]int64 `json:"meta"`
+	OK            bool           `json:"ok"`
+	SchemaVersion string         `json:"schema_version"`
+	Data          any            `json:"data,omitempty"`
+	Error         *jsonError     `json:"error,omitempty"`
+	Meta          map[string]any `json:"meta"`
 }
 
 type jsonError struct {

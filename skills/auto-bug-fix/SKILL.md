@@ -1,10 +1,10 @@
 ---
 name: auto-bug-fix
-version: 1.0.8
+version: 1.0.9
 description: "auto-bug-fix CLI for AI Agents operating an autonomous Jira Bug fix scheduler. Use for installing, configuring, preflighting, starting, stopping, updating, and auditing the scheduler; not for performing the per-ticket code repair directly."
 license: MIT
 user-invocable: true
-metadata: {"requires":{"bins":["auto-bug-fix"],"min_version":"1.0.8"}}
+metadata: {"requires":{"bins":["auto-bug-fix"],"min_version":"1.0.9"}}
 ---
 
 # auto-bug-fix
@@ -79,6 +79,7 @@ Default output is JSON. In JSON mode:
 - Business payload lives under `.data`.
 - Failures live under `.error` with `code`, `message`, `details`, and `retryable`.
 - `meta.duration_ms` is present.
+- `meta.notices` (omitempty) surfaces an available-update notice on **any** command, read-only from the local update cache (no network call) and severity-graded (`warning` when the changelog delta has a `security` entry or a major bump, else `info`). It is absent when the cache holds no available update. The fresh/active view stays in `data.notices` on `context`/`doctor`/`update --check`.
 - Progress, logs, and warnings go to stderr.
 
 `--json` is a compatibility alias. Prefer default JSON plus `--compact`.

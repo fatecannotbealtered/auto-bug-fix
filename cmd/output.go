@@ -113,12 +113,20 @@ func printJSONEnvelope(ok bool, data any, errObj *jsonError) {
 	if ok && len(activeOutput.Fields) > 0 {
 		data = filterFields(data, activeOutput.Fields)
 	}
+	meta := map[string]any{"duration_ms": time.Since(commandStartedAt).Milliseconds()}
+	// meta.notices is the read-only cache view of an available update, attached to
+	// EVERY command's meta (CLI-SPEC §3, §14). It reads only the local update
+	// cache — no network I/O — and is omitted when the cache has nothing to
+	// report. The active/fresh view stays in data.notices on context/doctor/update.
+	if notices := readUpdateNotices(); len(notices) > 0 {
+		meta["notices"] = notices
+	}
 	out := jsonEnvelope{
 		OK:            ok,
 		SchemaVersion: schemaVersion,
 		Data:          data,
 		Error:         errObj,
-		Meta:          map[string]int64{"duration_ms": time.Since(commandStartedAt).Milliseconds()},
+		Meta:          meta,
 	}
 	var (
 		b   []byte
