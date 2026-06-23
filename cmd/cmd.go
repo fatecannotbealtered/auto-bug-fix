@@ -21,6 +21,7 @@ import (
 	"github.com/fatecannotbealtered/auto-bug-fix/internal/doctor"
 	"github.com/fatecannotbealtered/auto-bug-fix/internal/guard"
 	"github.com/fatecannotbealtered/auto-bug-fix/internal/installer"
+	"github.com/fatecannotbealtered/auto-bug-fix/internal/notify"
 	"github.com/fatecannotbealtered/auto-bug-fix/internal/poller"
 	"github.com/fatecannotbealtered/auto-bug-fix/internal/state"
 )
@@ -119,6 +120,8 @@ func Execute() {
 			fail(exitUsage, "E_USAGE", "usage: auto-bug-fix fix <issueKey>", nil, false)
 		}
 		runFix(args[1], args[2:])
+	case "notify":
+		runNotify(args[1:])
 	case "version", "--version", "-v":
 		if wantsText() {
 			fmt.Println(version)
@@ -131,7 +134,7 @@ func Execute() {
 }
 
 func commandList() []string {
-	return []string{"setup", "start", "stop", "status", "doctor", "context", "reference", "changelog", "update", "fix", "version"}
+	return []string{"setup", "start", "stop", "status", "doctor", "context", "reference", "changelog", "update", "fix", "notify", "version"}
 }
 
 func printUsage() {
@@ -148,6 +151,7 @@ Usage:
   auto-bug-fix changelog [--since vX.Y.Z]                         Show version changes
   auto-bug-fix update [--check|--dry-run] [--target-version vX.Y.Z]  Update package and Skill in one call
   auto-bug-fix fix <issueKey> --dry-run|--confirm <token>          Manually trigger a fix
+  auto-bug-fix notify --issue KEY --outcome auto-fix [...]        Send the fixed Lark completion card (agent-invoked)
   auto-bug-fix version                                           Print version
 
 Global flags:
@@ -332,6 +336,10 @@ func defaultConfig(agentType string) map[string]any {
 			"handoff":    true,
 			"handoffDir": config.DefaultKnowledgeHandoffDir,
 		},
+		"notify": map[string]any{
+			"enabled": false,
+			"target":  "",
+		},
 	}
 }
 
@@ -460,6 +468,8 @@ func agentOptions(cfg config.Config) agent.Options {
 		"AUTO_BUG_FIX_KNOWLEDGE_UPDATE":      strconv.FormatBool(cfg.Knowledge.Update),
 		"AUTO_BUG_FIX_KNOWLEDGE_HANDOFF":     strconv.FormatBool(cfg.Knowledge.Handoff),
 		"AUTO_BUG_FIX_KNOWLEDGE_HANDOFF_DIR": cfg.Knowledge.HandoffDir,
+		"AUTO_BUG_FIX_NOTIFY_ENABLED":        strconv.FormatBool(cfg.Notify.Enabled),
+		"AUTO_BUG_FIX_NOTIFY_TARGET":         cfg.Notify.Target,
 	}}
 }
 
@@ -597,6 +607,94 @@ func fixResultData(issueKey string, result agent.Result) map[string]any {
 	}
 	data["_untrusted"] = untrusted
 	return data
+}
+
+// ── notify ─────────────────────────────────────────────────────────────────────
+
+// larkRunner runs lark-cli and returns stdout, keeping stdout even on a non-zero
+// exit so the JSON envelope (which lark-cli prints on failure too) stays parseable.
+func larkRunner(args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "lark-cli", args...).Output() //nolint:gosec
+	if len(out) > 0 {
+		return out, nil
+	}
+	return out, err
+}
+
+// runNotify renders the fixed completion card from flat fields and sends it via
+// lark-cli. The card layout is owned by internal/notify (not the agent), so the
+// style is identical across runs. It is agent-invoked at Step 8.5 and is exempt
+// from the confirm-token write gate (like `update`): a single best-effort send
+// that the agent never lets fail the fix. `--dry-run` renders a preview without
+// sending and needs no recipient.
+func runNotify(args []string) {
+	fs := flag.NewFlagSet("notify", flag.ContinueOnError)
+	issue := fs.String("issue", "", "Jira issue key")
+	outcome := fs.String("outcome", "", "auto-fix | auto-diagnose | needs-info")
+	summary := fs.String("summary", "", "ticket title/summary")
+	rootCause := fs.String("root-cause", "", "问题原因 (business language)")
+	solution := fs.String("solution", "", "解决方案 / 诊断与建议 / 待确认问题")
+	mrURL := fs.String("mr-url", "", "GitLab MR web URL (auto-fix only)")
+	jiraURL := fs.String("jira-url", "", "Jira issue URL")
+	to := fs.String("to", "", "recipient open_id (ou_…) or chat_id (oc_…); falls back to $AUTO_BUG_FIX_NOTIFY_TARGET")
+	service := fs.String("service", "", "service/repo name (footer)")
+	branch := fs.String("branch", "", "work branch (footer)")
+	duration := fs.String("duration", "", "run duration (footer)")
+	evidence := fs.String("evidence", "", "evidence note, e.g. Kibana logs / Archery data")
+	testStatus := fs.String("test-status", "", "test status line (auto-fix)")
+	dryRun := fs.Bool("dry-run", false, "render and preview the card without sending")
+	if err := fs.Parse(args); err != nil {
+		fail(exitUsage, "E_USAGE", "notify: "+err.Error(), nil, false)
+	}
+	if strings.TrimSpace(*issue) == "" || strings.TrimSpace(*outcome) == "" {
+		fail(exitUsage, "E_VALIDATION", "notify: --issue and --outcome are required", nil, false)
+	}
+	if !notify.ValidOutcome(*outcome) {
+		fail(exitUsage, "E_VALIDATION", "notify: --outcome must be auto-fix, auto-diagnose, or needs-info", nil, false)
+	}
+	card, err := notify.RenderCard(notify.Params{
+		Issue: *issue, Outcome: *outcome, Summary: *summary,
+		RootCause: *rootCause, Solution: *solution, MRURL: *mrURL, JiraURL: *jiraURL,
+		Service: *service, Branch: *branch, Duration: *duration,
+		Evidence: *evidence, TestStatus: *testStatus,
+	})
+	if err != nil {
+		fail(exitUsage, "E_VALIDATION", "notify: "+err.Error(), nil, false)
+	}
+
+	recipient := strings.TrimSpace(*to)
+	if recipient == "" {
+		recipient = strings.TrimSpace(os.Getenv("AUTO_BUG_FIX_NOTIFY_TARGET"))
+	}
+
+	if *dryRun {
+		var preview any
+		_ = json.Unmarshal([]byte(card), &preview)
+		printJSON(map[string]any{
+			"wouldSend": true,
+			"recipient": recipient,
+			"outcome":   *outcome,
+			"preview":   preview,
+		})
+		return
+	}
+
+	if recipient == "" {
+		fail(exitUsage, "E_VALIDATION", "notify: no recipient — pass --to <open_id/chat_id> or set notify.target", nil, false)
+	}
+	messageID, chatID, serr := notify.Send(recipient, card, larkRunner)
+	if serr != nil {
+		fail(exitGeneric, "E_RUNTIME", "notify: send failed: "+serr.Error(), nil, false)
+	}
+	printJSON(map[string]any{
+		"sent":      true,
+		"messageId": messageID,
+		"chatId":    chatID,
+		"recipient": recipient,
+		"outcome":   *outcome,
+	})
 }
 
 // ── stop / status ─────────────────────────────────────────────────────────────

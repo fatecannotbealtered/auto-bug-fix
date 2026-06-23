@@ -151,6 +151,14 @@ func Run(cfg config.Config, cfgErr error, look LookPath, probe Probe, tmpl Templ
 	}
 	checks = append(checks, filterScopeCheck(cfg.Poll.Filter))
 
+	// Completion-notification preflight: only relevant when enabled. lark-cli is a
+	// different CLI lineage (no `doctor --json` authValid contract), so this is a
+	// PATH-presence check only and never fails — a missing binary just means the
+	// best-effort card is skipped, never a blocked fix.
+	if cfg.Notify.Enabled {
+		checks = append(checks, larkNotifyCheck(look))
+	}
+
 	// Informational: surface where repos get cloned so the user is aware of the
 	// disk location (the default lives under home — C:\ on Windows). Never blocks.
 	if cfg.Workspace.Root != "" {
@@ -281,6 +289,17 @@ func filterScopeCheck(f config.FilterConfig) Check {
 		return Check{"fix scope", Warn, "no title filter: every open Bug assigned to you will be auto-fixed — ask the user whether to limit the scope (poll.filter.titleContains)"}
 	}
 	return Check{"fix scope", OK, "limited by title containing \"" + f.TitleContains + "\""}
+}
+
+// larkNotifyCheck verifies lark-cli is on PATH when completion notifications are
+// enabled. PATH-presence only: lark-cli (larksuite/cli) does not implement the
+// sibling `doctor --json` authValid contract, and the card is best-effort, so a
+// missing binary WARNs rather than fails.
+func larkNotifyCheck(look LookPath) Check {
+	if path, err := look("lark-cli"); err == nil {
+		return Check{"notify", OK, "lark-cli present for completion cards: " + path}
+	}
+	return Check{"notify", Warn, "notify.enabled=true but lark-cli is not on PATH; install lark-cli (npx skills add larksuite/cli) or set notify.enabled=false"}
 }
 
 // HasFailure reports whether any check failed (drives the exit code).

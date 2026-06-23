@@ -27,5 +27,9 @@
   "verify": {
     "enabled": false,
     "command": ""
+  },
+  "notify": {
+    "enabled": false,
+    "target": ""
   }
 }
