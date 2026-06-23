@@ -16,6 +16,7 @@ type Config struct {
 	Poll      PollConfig      `json:"poll"`
 	Workspace WorkspaceConfig `json:"workspace"`
 	Knowledge KnowledgeConfig `json:"knowledge"`
+	Notify    NotifyConfig    `json:"notify"`
 }
 
 type AgentConfig struct {
@@ -52,6 +53,17 @@ type KnowledgeConfig struct {
 	readSet    bool
 	updateSet  bool
 	handoffSet bool
+}
+
+// NotifyConfig controls the optional completion-notification channel. v1 sends a
+// one-way Lark (Feishu) interactive card via lark-cli after a fix run, so the
+// Jira follow-up owner sees the outcome, root cause, and change without polling.
+// Disabled by default (opt-in). No secrets here: lark-cli owns Lark auth; Target
+// is a non-secret routing value (a Lark chat_id / open_id) used as the fallback
+// recipient when the Jira assignee cannot be resolved.
+type NotifyConfig struct {
+	Enabled bool   `json:"enabled"`
+	Target  string `json:"target"`
 }
 
 // FilterConfig defines which Bugs to process. All fields are optional.
@@ -157,6 +169,7 @@ func substituteEnvInConfig(cfg *Config) []string {
 	cfg.Workspace.Cleanup = substituteEnv(cfg.Workspace.Cleanup, missing)
 	cfg.Knowledge.Dir = substituteEnv(cfg.Knowledge.Dir, missing)
 	cfg.Knowledge.HandoffDir = substituteEnv(cfg.Knowledge.HandoffDir, missing)
+	cfg.Notify.Target = substituteEnv(cfg.Notify.Target, missing)
 
 	if len(missing) == 0 {
 		return nil

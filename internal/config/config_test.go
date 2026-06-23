@@ -143,6 +143,50 @@ func TestLoad_PreservesExplicitKnowledgeFalse(t *testing.T) {
 	}
 }
 
+func TestLoad_NotifyDefaultsDisabled(t *testing.T) {
+	path := writeConfig(t, map[string]any{})
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Notify.Enabled {
+		t.Fatal("notify.enabled should default to false (opt-in)")
+	}
+	if cfg.Notify.Target != "" {
+		t.Fatalf("notify.target should default to empty, got %q", cfg.Notify.Target)
+	}
+}
+
+func TestLoad_NotifyParsed(t *testing.T) {
+	path := writeConfig(t, map[string]any{
+		"notify": map[string]any{"enabled": true, "target": "oc_chat123"},
+	})
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Notify.Enabled {
+		t.Fatal("notify.enabled=true should be parsed")
+	}
+	if cfg.Notify.Target != "oc_chat123" {
+		t.Fatalf("notify.target: got %q, want %q", cfg.Notify.Target, "oc_chat123")
+	}
+}
+
+func TestLoad_NotifyTargetSubstitutesEnv(t *testing.T) {
+	t.Setenv("TEST_LARK_CHAT", "oc_fromenv")
+	path := writeConfig(t, map[string]any{
+		"notify": map[string]any{"enabled": true, "target": "$TEST_LARK_CHAT"},
+	})
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Notify.Target != "oc_fromenv" {
+		t.Fatalf("notify.target env substitution: got %q, want %q", cfg.Notify.Target, "oc_fromenv")
+	}
+}
+
 func TestLoad_FileNotFound(t *testing.T) {
 	_, err := config.Load(filepath.Join(t.TempDir(), "missing.json"))
 	if err == nil {

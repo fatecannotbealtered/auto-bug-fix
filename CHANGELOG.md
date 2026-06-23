@@ -7,6 +7,10 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- **Optional one-way Lark (Feishu) completion notification with a fixed, Go-rendered card.** After a fix run, the agent sends a single interactive Lark card to the Jira follow-up owner (assignee) summarising the outcome (`auto-fix`/`auto-diagnose`/`needs-info`), root cause (【问题原因】), and change (【解决方案】), with jump-out buttons to the Jira issue and the GitLab MR. The card **layout is fixed in `internal/notify` and rendered by a new `auto-bug-fix notify` command** (header colour, the "next step" line, and the MR button are derived from `--outcome`), so the style never drifts across runs/agents/models — the agent supplies only flat fields and builds no card JSON. `notify` sends via `lark-cli` (Lark auth lives there — no secrets in config) and is exempt from the confirm-token gate like `update`; `--dry-run` renders a preview without sending. Opt-in via a new `notify` config block (`notify.enabled`, default `false`; `notify.target` a non-secret fallback Lark `chat_id`/`open_id`), injected to the agent as `AUTO_BUG_FIX_NOTIFY_ENABLED` / `AUTO_BUG_FIX_NOTIFY_TARGET`; the agent resolves the assignee → open_id via the lark-contact skill. It is **best-effort** — a failed send never fails, retries, or changes the fix outcome. `doctor` adds a notify-gated `lark-cli` PATH check (WARN-only) when notifications are enabled. Added Step 8.5 to all four agent templates, guarded by a template invariant. Kibana/Archery evidence is shown as text for now — a one-click deep link is a seam pending kibana-cli (kibana-cli#11).
+
 ## [1.0.9] - 2026-06-22
 
 ### Added

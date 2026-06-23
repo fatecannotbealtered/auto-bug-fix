@@ -43,6 +43,7 @@ func TestAgentTemplates_ShareLoadBearingPolicy(t *testing.T) {
 		{"localized-change ceiling", []string{"more than 5 files", "5 files"}},
 		{"business-language Jira root-cause", []string{"【问题原因】"}},
 		{"business-language Jira solution", []string{"【解决方案】"}},
+		{"completion notification step (Lark) when enabled", []string{"AUTO_BUG_FIX_NOTIFY", "completion notification"}},
 	}
 
 	for agentName, path := range agentTemplates() {

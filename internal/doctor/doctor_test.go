@@ -332,3 +332,38 @@ func TestRun_EmptyCommandFails(t *testing.T) {
 		t.Errorf("agent CLI should Fail on empty command, got %v", got)
 	}
 }
+
+func TestRun_NotifyEnabledLarkPresentOK(t *testing.T) {
+	cfg := cfgWith("kiro-cli", "kiro")
+	cfg.Notify.Enabled = true
+	present := allPresent()
+	present["lark-cli"] = true
+	checks := Run(cfg, nil, lookFake(present), probeFake(allAuthed()), tmplInstalled, skillsInstalled)
+	if HasFailure(checks) {
+		t.Fatalf("notify check must never fail, got %+v", checks)
+	}
+	if got := levelOf(checks, "notify"); got != OK {
+		t.Errorf("notify should be OK when lark-cli is present, got %v", got)
+	}
+}
+
+func TestRun_NotifyEnabledLarkMissingWarns(t *testing.T) {
+	cfg := cfgWith("kiro-cli", "kiro")
+	cfg.Notify.Enabled = true
+	// allPresent() has no lark-cli, so the binary is absent.
+	checks := Run(cfg, nil, lookFake(allPresent()), probeFake(allAuthed()), tmplInstalled, skillsInstalled)
+	if HasFailure(checks) {
+		t.Fatalf("missing lark-cli must only warn, got %+v", checks)
+	}
+	if got := levelOf(checks, "notify"); got != Warn {
+		t.Errorf("notify should Warn when lark-cli is missing, got %v", got)
+	}
+}
+
+func TestRun_NotifyDisabledNoCheck(t *testing.T) {
+	cfg := cfgWith("kiro-cli", "kiro") // Notify.Enabled defaults false
+	checks := Run(cfg, nil, lookFake(allPresent()), probeFake(allAuthed()), tmplInstalled, skillsInstalled)
+	if got := levelOf(checks, "notify"); got != -1 {
+		t.Errorf("notify check should be absent when notify is disabled, got level %v", got)
+	}
+}

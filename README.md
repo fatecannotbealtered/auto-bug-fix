@@ -155,6 +155,10 @@ Config location: `~/.auto-bug-fix/config.json`.
     "update": true,
     "handoff": true,
     "handoffDir": "handoff"
+  },
+  "notify": {
+    "enabled": false,
+    "target": ""
   }
 }
 ```
@@ -170,6 +174,8 @@ Config location: `~/.auto-bug-fix/config.json`.
 | `workspace.root` | `~/.auto-bug-fix/workspaces` | Clone/reuse root for Git repositories. |
 | `workspace.cleanup` | `keep` | `keep`, `on-success`, or `always`. |
 | `knowledge.*` | see JSON | Repo-local business knowledge settings passed to the spawned agent. |
+| `notify.enabled` | `false` | Send a one-way Lark (Feishu) completion card via `lark-cli` after each fix. Opt-in. |
+| `notify.target` | empty | Fallback Lark recipient (`chat_id`/`open_id`) when the Jira assignee can't be resolved. No secrets — `lark-cli` owns Lark auth. |
 
 State lives at `~/.auto-bug-fix/state.json`; logs at `~/.auto-bug-fix/poller.log`; the PID file at `~/.auto-bug-fix/poller.pid`.
 

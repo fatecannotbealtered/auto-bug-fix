@@ -155,6 +155,10 @@ auto-bug-fix update --compact           # 一次完成 包 + Skill 更新（无 
     "update": true,
     "handoff": true,
     "handoffDir": "handoff"
+  },
+  "notify": {
+    "enabled": false,
+    "target": ""
   }
 }
 ```
@@ -170,6 +174,8 @@ auto-bug-fix update --compact           # 一次完成 包 + Skill 更新（无 
 | `workspace.root` | `~/.auto-bug-fix/workspaces` | Git 仓库 clone/reuse 根目录。 |
 | `workspace.cleanup` | `keep` | `keep`、`on-success` 或 `always`。 |
 | `knowledge.*` | 见 JSON | 传给 spawned agent 的仓库内业务知识配置。 |
+| `notify.enabled` | `false` | 修复后通过 `lark-cli` 给 Jira 跟进人发一张单向飞书完成卡片。默认关闭，需显式开启。 |
+| `notify.target` | 空 | 当 Jira 经办人解析不到时的兜底飞书接收者（`chat_id`/`open_id`）。不放密钥——飞书认证归 `lark-cli`。 |
 
 状态文件在 `~/.auto-bug-fix/state.json`；日志在 `~/.auto-bug-fix/poller.log`；PID 文件在 `~/.auto-bug-fix/poller.pid`。
 
