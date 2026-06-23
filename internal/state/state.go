@@ -36,6 +36,12 @@ type IssueEntry struct {
 	ExitCode       int       `json:"exitCode,omitempty"`
 	DurationMillis int64     `json:"durationMillis,omitempty"`
 	LastError      string    `json:"lastError,omitempty"`
+	// Verdict records the guard's decision when the two-phase evidence gate is on:
+	// "refute" means an auto-fix proposal was downgraded to auto-diagnose (by the
+	// verifier or an integrity check); empty means the gate did not act.
+	// VerifyReason carries the one-line reason for an audit trail.
+	Verdict      string `json:"verdict,omitempty"`
+	VerifyReason string `json:"verifyReason,omitempty"`
 }
 
 type State struct {
@@ -114,6 +120,8 @@ func (s *State) StartIssue(issueKey, agentCommand string) {
 	entry.ExitCode = 0
 	entry.DurationMillis = 0
 	entry.LastError = ""
+	entry.Verdict = ""
+	entry.VerifyReason = ""
 }
 
 // RedactCommand removes obvious inline secrets before a command is written to
@@ -153,6 +161,8 @@ type FinishDetails struct {
 	ExitCode       int
 	DurationMillis int64
 	LastError      string
+	Verdict        string
+	VerifyReason   string
 }
 
 func (s *State) FinishIssue(issueKey string, status Status, details FinishDetails) {
@@ -173,6 +183,8 @@ func (s *State) FinishIssue(issueKey string, status Status, details FinishDetail
 	entry.ExitCode = details.ExitCode
 	entry.DurationMillis = details.DurationMillis
 	entry.LastError = details.LastError
+	entry.Verdict = details.Verdict
+	entry.VerifyReason = details.VerifyReason
 }
 
 // ReclaimStaleTriggered marks every still-"triggered" issue as "interrupted".

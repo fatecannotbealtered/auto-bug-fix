@@ -155,6 +155,10 @@ Config location: `~/.auto-bug-fix/config.json`.
     "update": true,
     "handoff": true,
     "handoffDir": "handoff"
+  },
+  "verify": {
+    "enabled": false,
+    "command": ""
   }
 }
 ```
@@ -170,6 +174,8 @@ Config location: `~/.auto-bug-fix/config.json`.
 | `workspace.root` | `~/.auto-bug-fix/workspaces` | Clone/reuse root for Git repositories. |
 | `workspace.cleanup` | `keep` | `keep`, `on-success`, or `always`. |
 | `knowledge.*` | see JSON | Repo-local business knowledge settings passed to the spawned agent. |
+| `verify.enabled` | `false` | Two-phase pre-write gate. When on, an auto-fix first investigates and commits **locally** (no writes), an independent read-only verifier reviews the evidence chain against the real diff, and only an upheld proposal proceeds to open the MR; a refuted or integrity-failed proposal is downgraded to auto-diagnose with no MR. Costs 2-3 agent spawns per auto-fix. |
+| `verify.command` | derived | Read-only verifier launch command; derived at runtime for a known agentType, required for a custom agent. The verify phase's read-only posture is template+prompt convention, not a sandbox. |
 
 State lives at `~/.auto-bug-fix/state.json`; logs at `~/.auto-bug-fix/poller.log`; the PID file at `~/.auto-bug-fix/poller.pid`.
 
@@ -182,7 +188,7 @@ auto-bug-fix/
 ├── .github/
 ├── agents/                 # subagent templates for kiro/cursor/claude-code/codex
 ├── cmd/                    # CLI commands and self-description
-├── internal/               # scheduler, config, doctor, installer, poller, state
+├── internal/               # scheduler, config, doctor, installer, poller, state, guard, git
 ├── skills/auto-bug-fix/    # bundled operator Skill
 ├── docs/
 ├── scripts/                # npm wrapper and release helpers

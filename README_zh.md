@@ -155,6 +155,10 @@ auto-bug-fix update --compact           # 一次完成 包 + Skill 更新（无 
     "update": true,
     "handoff": true,
     "handoffDir": "handoff"
+  },
+  "verify": {
+    "enabled": false,
+    "command": ""
   }
 }
 ```
@@ -170,6 +174,8 @@ auto-bug-fix update --compact           # 一次完成 包 + Skill 更新（无 
 | `workspace.root` | `~/.auto-bug-fix/workspaces` | Git 仓库 clone/reuse 根目录。 |
 | `workspace.cleanup` | `keep` | `keep`、`on-success` 或 `always`。 |
 | `knowledge.*` | 见 JSON | 传给 spawned agent 的仓库内业务知识配置。 |
+| `verify.enabled` | `false` | 两阶段事前守门：开启后 auto-fix 先「调查 + 本地 commit（不写）」，再由独立只读 verifier 复核证据链，通过才开 MR；被否或完整性校验失败则降级为 auto-diagnose、不开 MR。代价是每个 auto-fix 变 2–3 次 agent 调用。 |
+| `verify.command` | 推导 | 只读 verifier 的启动命令；已知 agentType 运行时推导，自定义 agent 必填。验证阶段的只读为模板 + prompt 约定级（非沙箱隔离）。 |
 
 状态文件在 `~/.auto-bug-fix/state.json`；日志在 `~/.auto-bug-fix/poller.log`；PID 文件在 `~/.auto-bug-fix/poller.pid`。
 
@@ -182,7 +188,7 @@ auto-bug-fix/
 ├── .github/
 ├── agents/                 # kiro/cursor/claude-code/codex subagent 模板
 ├── cmd/                    # CLI 命令与自描述
-├── internal/               # scheduler、config、doctor、installer、poller、state
+├── internal/               # scheduler、config、doctor、installer、poller、state、guard、git
 ├── skills/auto-bug-fix/    # operator Skill
 ├── docs/
 ├── scripts/                # npm wrapper 与 release helpers

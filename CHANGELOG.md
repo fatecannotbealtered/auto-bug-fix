@@ -7,6 +7,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- **Two-phase pre-write evidence gate (`verify.enabled`, default off) so an auto-fix is independently reviewed BEFORE any MR is opened.** When enabled, an `auto-fix` is split into three harness-orchestrated spawns: an **investigate** phase reads/triages/analyzes, writes the minimal fix, runs tests, and commits **locally** on the work branch — no push, no MR, no Jira write — then emits an `AUTO_BUG_FIX_PROPOSAL` marker carrying the workspace, branch, base, committed `head` SHA, and an `evidence.json` path; the harness integrity-checks the proposal against the **real git checkout it owns** (workspace under the configured root, branch `fix/*`, `HEAD` matches the reported commit, diff vs base non-empty); an independent **read-only verifier** spawn reviews the real diff plus the evidence record and emits `AUTO_BUG_FIX_VERIFY verdict=uphold|refute`; only an upheld proposal proceeds to an **execute** phase that pushes and opens the MR. A refuted or integrity-failed proposal is **downgraded to `auto-diagnose` with no MR**, with the verdict + reason persisted to state (`verdict` / `verifyReason`). The verifier holds no write credentials, so its worst case is a false downgrade, never a bad MR. Honest boundary: the investigate/verify read-only posture is template + prompt convention, not an OS sandbox. Costs 2-3 agent spawns per auto-fix; `auto-diagnose`/`needs-info` stay a single spawn. With `verify.enabled=false` the flow is the unchanged single-shot run.
+- **New marker prefixes `AUTO_BUG_FIX_PROPOSAL` and `AUTO_BUG_FIX_VERIFY`** (distinct from terminal `AUTO_BUG_FIX_RESULT`), parsed by a generalized `ParseMarker`; the live scanner now watches per-phase prefixes. `ParseResultMarker` and the single-shot path stay backward compatible.
+- **New `internal/git` and `internal/guard` packages** (read-only diff/HEAD/branch inspection; the `RunGuarded` two-phase orchestration); `internal/state` records `verdict`/`verifyReason`; all four agent templates gain an Execution Phases section, guarded by the template invariants test.
+
 ## [1.0.9] - 2026-06-22
 
 ### Added

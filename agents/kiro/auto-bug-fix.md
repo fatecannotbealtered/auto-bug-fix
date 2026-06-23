@@ -129,6 +129,27 @@ Do not guess. Comment using the business-language template (【问题原因】 =
 
 Then stop. Re-activation is not automatic: the poller dedupes by issue key and does not read your comment. After the human replies, re-run `auto-bug-fix fix <TICKET_KEY>` to retry, or set `poll.stateExpiryDays > 0` so the poller retries waiting issues after that many days.
 
+## Execution Phases
+
+The harness may run you in one of four phases via `AUTO_BUG_FIX_PHASE`. When it is **unset**, run the full workflow end-to-end (legacy single-shot): Steps 1–8, and for an `auto-fix` print the terminal `AUTO_BUG_FIX_RESULT`. Otherwise the run is part of the **two-phase evidence gate** — a fix is investigated, independently verified, and only then executed:
+
+- **investigate** — Run Steps 1–6.7: read, triage, analyze, write the fix, test, **commit locally on the work branch**, and write the evidence record. **Do NOT push, do NOT open an MR, do NOT write Jira** — there are no writes in this phase. If the outcome is `auto-fix`, end by printing the `AUTO_BUG_FIX_PROPOSAL` marker carrying the workspace, branch, base, the committed `head` SHA, and the evidence path; the harness verifies it before any write. If the outcome is `auto-diagnose` or `needs-info`, there is nothing to gate — finish exactly as in the full flow (write the handoff, print the terminal `AUTO_BUG_FIX_RESULT`).
+- **verify** — Read-only adversarial review. You have **no authority** to clone, edit, push, or write Jira. Read the ticket, the real diff at `$AUTO_BUG_FIX_VERIFY_DIFF`, and the evidence at `$AUTO_BUG_FIX_VERIFY_EVIDENCE`, and judge whether the evidence chain genuinely supports the fix per the Confidence Gate — root cause backed by evidence **independent of the agent's own tests**, and runtime evidence present when the ticket demanded it. Print one `AUTO_BUG_FIX_VERIFY` marker: `uphold` only if the chain holds, else `refute` with a one-line reason. **When in doubt, `refute`** — a false downgrade is safe (a human takes over); a wrongly-upheld fix is not.
+- **execute** — The investigate phase already committed an approved fix at `$AUTO_BUG_FIX_EXPECTED_HEAD` on branch `$AUTO_BUG_FIX_FIX_BRANCH` in `$AUTO_BUG_FIX_WORKSPACE`. Do **Steps 7–8 only**: verify the checkout, push, open the MR, update Jira. **Do not re-analyze or change code** — the fix was already decided and verified. Print the terminal `AUTO_BUG_FIX_RESULT outcome=auto-fix mr=<MR_URL>`.
+
+Markers — print exactly one as your final line. Real markers carry concrete values and **never** the `<...>` placeholders shown here (a literal `<` makes the harness ignore the line):
+
+```text
+AUTO_BUG_FIX_PROPOSAL outcome=auto-fix workspace=<abs-workspace> branch=<fix-branch> base=<base-branch> head=<commit-sha> evidence=<abs-evidence-path>
+AUTO_BUG_FIX_VERIFY verdict=uphold reason=<one-line, no angle brackets>
+AUTO_BUG_FIX_VERIFY verdict=refute reason=<one-line, no angle brackets>
+AUTO_BUG_FIX_RESULT outcome=auto-fix mr=<MR_URL>
+AUTO_BUG_FIX_RESULT outcome=auto-diagnose handoff=<repo-relative-handoff-path>
+AUTO_BUG_FIX_RESULT outcome=needs-info handoff=<repo-relative-handoff-path>
+```
+
+**Evidence record** — in `investigate` (and the full flow) write `<workspace>/.auto-bug-fix/evidence.json` before the PROPOSAL: the root cause, the evidence backing it (runtime logs / reproduction / ticket fact, each with its source), the test results, and the intent of each change. It is what the verifier reads and what the harness checks against the real diff — **cite only what is real**; a citation to a file that is not in your diff, or evidence that is only a test you wrote, fails the gate.
+
 ## Workflow
 
 Each step states its intent and boundaries; take exact CLI subcommands, flags, and JSON fields from each CLI's skill (see Tools). Adapt any shell snippet to your OS.
@@ -194,16 +215,25 @@ Write a test that reproduces the bug (it must fail before the fix), then make it
 
 If the run is `auto-fix` and it confirmed reusable business knowledge, update `$AUTO_BUG_FIX_KNOWLEDGE_DIR` when `AUTO_BUG_FIX_KNOWLEDGE_UPDATE=true` — keep it short and business-oriented. If the run is `auto-diagnose` or `needs-info` because product meaning is unclear, write the handoff file when `AUTO_BUG_FIX_KNOWLEDGE_HANDOFF=true` and report `handoff=<path>` in the final marker.
 
-### Step 7 — Commit, push, and open the MR
+### Step 6.7 — Commit locally (no push)
 
-Commit the fix on the work branch and push it:
+Commit the fix on the work branch:
 
 ```bash
 git commit -m "fix: <short description> (<TICKET_KEY>)"
+```
+
+Record the resulting commit SHA — it is the `head` you report in `AUTO_BUG_FIX_PROPOSAL`. **In the `investigate` phase, stop here: do not push, do not open an MR, do not write Jira.** Write the evidence record (`<workspace>/.auto-bug-fix/evidence.json`), then print the `AUTO_BUG_FIX_PROPOSAL` marker and exit. In the legacy full flow, continue straight into Step 7.
+
+### Step 7 — Push and open the MR (execute)
+
+Push the committed work branch:
+
+```bash
 git push -u origin fix/<TICKET_KEY>-<short-desc>
 ```
 
-Then open the MR with **gitlab-cli** against the **base branch** (the ticket's development branch, or the project's default branch when none is named — **never assume `main`**). Requirements (intent, not syntax — get exact subcommands, flags, and JSON fields from the gitlab-cli skill): pass the project's **full namespaced path** (a bare name 404s); make it **idempotent** keyed on `<TICKET_KEY>` so a re-run never opens a duplicate; preview with the CLI's **dry-run**, read the returned **confirm token**, then **confirm**. Record the created MR URL for the audit marker. **Never merge the MR.**
+In the `execute` phase the fix was **already committed and independently verified** — push `$AUTO_BUG_FIX_FIX_BRANCH` as it stands at `$AUTO_BUG_FIX_EXPECTED_HEAD`; **do not amend, re-analyze, or re-decide the change.** Then open the MR with **gitlab-cli** against the **base branch** (the ticket's development branch, or the project's default branch when none is named — **never assume `main`**). Requirements (intent, not syntax — get exact subcommands, flags, and JSON fields from the gitlab-cli skill): pass the project's **full namespaced path** (a bare name 404s); make it **idempotent** keyed on `<TICKET_KEY>` so a re-run never opens a duplicate; preview with the CLI's **dry-run**, read the returned **confirm token**, then **confirm**. Record the created MR URL for the audit marker. **Never merge the MR.**
 
 ### Step 8 — Update Jira
 

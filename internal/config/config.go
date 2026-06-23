@@ -16,6 +16,18 @@ type Config struct {
 	Poll      PollConfig      `json:"poll"`
 	Workspace WorkspaceConfig `json:"workspace"`
 	Knowledge KnowledgeConfig `json:"knowledge"`
+	Verify    VerifyConfig    `json:"verify"`
+}
+
+// VerifyConfig configures the two-phase evidence gate. When Enabled, an auto-fix is
+// split into investigate (local commit, no writes) -> read-only verifier -> execute,
+// and a refuted or integrity-failed proposal is downgraded to auto-diagnose BEFORE
+// any MR is opened. Command is the read-only verifier launch command; when empty and
+// agentType is known it is derived at runtime (installer.VerifierCommand), mirroring
+// how agent.command is derived. The default is disabled — behavior unchanged.
+type VerifyConfig struct {
+	Enabled bool   `json:"enabled"`
+	Command string `json:"command"`
 }
 
 type AgentConfig struct {
@@ -157,6 +169,7 @@ func substituteEnvInConfig(cfg *Config) []string {
 	cfg.Workspace.Cleanup = substituteEnv(cfg.Workspace.Cleanup, missing)
 	cfg.Knowledge.Dir = substituteEnv(cfg.Knowledge.Dir, missing)
 	cfg.Knowledge.HandoffDir = substituteEnv(cfg.Knowledge.HandoffDir, missing)
+	cfg.Verify.Command = substituteEnv(cfg.Verify.Command, missing)
 
 	if len(missing) == 0 {
 		return nil
@@ -270,6 +283,11 @@ func Validate(cfg Config) error {
 	}
 	if !isRepoRelativePath(cfg.Knowledge.HandoffDir) {
 		return fmt.Errorf("knowledge.handoffDir must be a repo-relative path")
+	}
+	// A custom agent cannot have its verifier command derived, so require it
+	// explicitly when the gate is on. A known agentType derives it at runtime.
+	if cfg.Verify.Enabled && strings.TrimSpace(cfg.Verify.Command) == "" && !KnownAgentType(cfg.Agent.AgentType) {
+		return fmt.Errorf("verify.command is required when verify.enabled is true and agentType is custom")
 	}
 	return nil
 }

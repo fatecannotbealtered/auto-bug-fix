@@ -23,5 +23,9 @@
     "update": true,
     "handoff": true,
     "handoffDir": "handoff"
+  },
+  "verify": {
+    "enabled": false,
+    "command": ""
   }
 }

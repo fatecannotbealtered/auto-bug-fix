@@ -73,6 +73,8 @@ func PollOnce(jira JiraLister, trigger Triggerer, st *state.State, filter config
 				HandoffPath:    result.HandoffPath,
 				ExitCode:       result.ExitCode,
 				DurationMillis: result.DurationMillis,
+				Verdict:        result.Verdict,
+				VerifyReason:   result.VerifyReason,
 			}
 			if err != nil {
 				details.LastError = err.Error()

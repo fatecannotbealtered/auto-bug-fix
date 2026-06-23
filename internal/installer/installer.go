@@ -269,6 +269,18 @@ func AgentCommand(agentType, model string) string {
 	}
 }
 
+// VerifierCommand returns the launch command for the two-phase evidence gate's
+// read-only verifier phase. The verifier still needs to drive jira-cli to read the
+// ticket (the harness does not hold the ticket text), so it cannot run with shell
+// access fully removed; the read-only posture is therefore enforced by the
+// AUTO_BUG_FIX_PHASE=verify template branch (no clone/edit/push/Jira-write), not by
+// a physical capability drop. The command mirrors AgentCommand per agentType; the
+// phase env var and prefixes are set by the spawner. Honest boundary: this is a
+// convention-level read-only, not a sandbox — see SECURITY.md / the plan's risk list.
+func VerifierCommand(agentType, model string) string {
+	return AgentCommand(agentType, model)
+}
+
 // modelFlag renders ` --model "<model>"` (quoted, so a model name with spaces
 // survives the no-shell tokenizer) or "" when no model is pinned.
 func modelFlag(model string) string {

@@ -19,6 +19,7 @@ import (
 	"github.com/fatecannotbealtered/auto-bug-fix/internal/config"
 	"github.com/fatecannotbealtered/auto-bug-fix/internal/daemon"
 	"github.com/fatecannotbealtered/auto-bug-fix/internal/doctor"
+	"github.com/fatecannotbealtered/auto-bug-fix/internal/guard"
 	"github.com/fatecannotbealtered/auto-bug-fix/internal/installer"
 	"github.com/fatecannotbealtered/auto-bug-fix/internal/poller"
 	"github.com/fatecannotbealtered/auto-bug-fix/internal/state"
@@ -426,7 +427,7 @@ func runStart(args []string) {
 	}
 
 	jira := &poller.CLIJira{}
-	trigger := &agentTrigger{command: cfg.Agent.Command, options: agentOptions(cfg)}
+	trigger := newAgentTrigger(cfg)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -445,6 +446,7 @@ func runStart(args []string) {
 	log.Printf("[auto-bug-fix] Max concurrent fixes: %d", cfg.Poll.MaxConcurrent)
 	log.Printf("[auto-bug-fix] Workspace root: %s (cleanup=%s)", cfg.Workspace.Root, cfg.Workspace.Cleanup)
 	log.Printf("[auto-bug-fix] Knowledge dir: %s (read=%t update=%t handoff=%t handoffDir=%s)", cfg.Knowledge.Dir, cfg.Knowledge.Read, cfg.Knowledge.Update, cfg.Knowledge.Handoff, cfg.Knowledge.HandoffDir)
+	log.Printf("[auto-bug-fix] Verify gate: enabled=%t", cfg.Verify.Enabled)
 	poller.Run(ctx, jira, trigger, st, cfg.Poll.Filter, interval, statePath, cfg.Poll.MaxConcurrent, cfg.Poll.StateExpiryDays)
 	log.Println("[auto-bug-fix] Stopped.")
 }
@@ -461,9 +463,36 @@ func agentOptions(cfg config.Config) agent.Options {
 	}}
 }
 
+// envPhase is the env var the agent templates read to pick which slice of the
+// per-ticket workflow to run (investigate / verify / execute). Absent = legacy
+// single-shot flow.
+const envPhase = "AUTO_BUG_FIX_PHASE"
+
+// agentTrigger hosts the two-phase evidence gate. Its Trigger drives
+// guard.RunGuarded, and its spawn (a guard.SpawnFunc) wires per-phase command,
+// marker prefixes, and env. When the gate is disabled, RunGuarded runs a single
+// PhaseFull spawn — behavior identical to the pre-guard single agent.Trigger call.
 type agentTrigger struct {
-	command string
-	options agent.Options
+	command         string
+	verifierCommand string
+	baseEnv         map[string]string
+	guardCfg        guard.Config
+}
+
+func newAgentTrigger(cfg config.Config) *agentTrigger {
+	vcmd := cfg.Verify.Command
+	if cfg.Verify.Enabled && strings.TrimSpace(vcmd) == "" {
+		vcmd = installer.VerifierCommand(cfg.Agent.AgentType, cfg.Agent.Model)
+	}
+	return &agentTrigger{
+		command:         cfg.Agent.Command,
+		verifierCommand: vcmd,
+		baseEnv:         agentOptions(cfg).Env,
+		guardCfg: guard.Config{
+			Enabled:       cfg.Verify.Enabled,
+			WorkspaceRoot: cfg.Workspace.Root,
+		},
+	}
 }
 
 func (a *agentTrigger) Command() string {
@@ -471,8 +500,43 @@ func (a *agentTrigger) Command() string {
 }
 
 func (a *agentTrigger) Trigger(issueKey string) (agent.Result, error) {
-	log.Printf("[auto-bug-fix] Triggering fix for %s", issueKey)
-	return agent.Trigger(issueKey, a.command, a.options)
+	return guard.RunGuarded(issueKey, a.guardCfg, a.spawn)
+}
+
+// spawn implements guard.SpawnFunc: it selects the command, the marker prefixes the
+// live scanner kills on, and the AUTO_BUG_FIX_PHASE env for the given phase, then
+// merges guard's phase-specific env (expected head, diff path, etc.).
+func (a *agentTrigger) spawn(issueKey string, phase guard.Phase, extraEnv map[string]string) (agent.Result, error) {
+	command := a.command
+	prefixes := [][]byte{[]byte(agent.ResultMarkerPrefix)}
+	env := cloneEnv(a.baseEnv)
+
+	switch phase {
+	case guard.PhaseFull:
+		// legacy single-shot: no phase env, terminal RESULT marker only.
+	case guard.PhaseInvestigate:
+		env[envPhase] = string(guard.PhaseInvestigate)
+		prefixes = [][]byte{[]byte(agent.ProposalMarkerPrefix), []byte(agent.ResultMarkerPrefix)}
+	case guard.PhaseVerify:
+		command = a.verifierCommand
+		env[envPhase] = string(guard.PhaseVerify)
+		prefixes = [][]byte{[]byte(agent.VerifyMarkerPrefix)}
+	case guard.PhaseExecute:
+		env[envPhase] = string(guard.PhaseExecute)
+	}
+	for k, v := range extraEnv {
+		env[k] = v
+	}
+	log.Printf("[auto-bug-fix] Triggering %s phase for %s", phase, issueKey)
+	return agent.Trigger(issueKey, command, agent.Options{Env: env, MarkerPrefixes: prefixes})
+}
+
+func cloneEnv(src map[string]string) map[string]string {
+	dst := make(map[string]string, len(src)+4)
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
 }
 
 // ── fix ──────────────────────────────────────────────────────────────────────
@@ -492,7 +556,7 @@ func runFix(issueKey string, args []string) {
 	cfg := preflight(cfgPath)
 
 	log.Printf("[auto-bug-fix] Triggering fix for %s...", issueKey)
-	result, err := agent.Trigger(issueKey, cfg.Agent.Command, agentOptions(cfg))
+	result, err := newAgentTrigger(cfg).Trigger(issueKey)
 	if result.Outcome != "" {
 		log.Printf("[auto-bug-fix] Outcome: %s", result.Outcome)
 	}
@@ -516,13 +580,23 @@ func runFix(issueKey string, args []string) {
 // they are tagged via _untrusted exactly as the reference fix_result schema
 // declares — keeping the self-description honest.
 func fixResultData(issueKey string, result agent.Result) map[string]any {
-	return map[string]any{
+	untrusted := []string{"outcome", "mrUrl", "handoffPath"}
+	data := map[string]any{
 		"issueKey":    issueKey,
 		"outcome":     result.Outcome,
 		"mrUrl":       result.MRURL,
 		"handoffPath": result.HandoffPath,
-		"_untrusted":  []string{"outcome", "mrUrl", "handoffPath"},
 	}
+	// When the gate acted, surface its verdict + reason. verifyReason comes from
+	// the verifier agent's stdout, so it is tagged _untrusted like the other
+	// agent-controlled fields.
+	if result.Verdict != "" {
+		data["verdict"] = result.Verdict
+		data["verifyReason"] = result.VerifyReason
+		untrusted = append(untrusted, "verdict", "verifyReason")
+	}
+	data["_untrusted"] = untrusted
+	return data
 }
 
 // ── stop / status ─────────────────────────────────────────────────────────────

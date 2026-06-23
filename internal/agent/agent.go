@@ -12,14 +12,41 @@ import (
 	"time"
 )
 
-const ResultMarkerPrefix = "AUTO_BUG_FIX_RESULT"
+// Marker prefixes the harness recognizes on the agent's stdout. The single-phase
+// RESULT marker is the terminal outcome; PROPOSAL is Phase A's "investigation done,
+// here is what I would do" report (no writes yet); VERIFY is the read-only
+// verifier's verdict. They are distinct prefixes on purpose: the live scanner kills
+// the child on a marker, so a mid-run line sharing the RESULT prefix would kill the
+// process prematurely.
+const (
+	ResultMarkerPrefix   = "AUTO_BUG_FIX_RESULT"
+	ProposalMarkerPrefix = "AUTO_BUG_FIX_PROPOSAL"
+	VerifyMarkerPrefix   = "AUTO_BUG_FIX_VERIFY"
+)
 
-// Known outcome values an agent reports in its AUTO_BUG_FIX_RESULT marker.
+// MarkerKind records which marker line ParseMarker matched, so callers can branch
+// without re-parsing the prefix.
+type MarkerKind string
+
+const (
+	MarkerNone     MarkerKind = ""
+	MarkerResult   MarkerKind = "result"
+	MarkerProposal MarkerKind = "proposal"
+	MarkerVerify   MarkerKind = "verify"
+)
+
+// Known outcome values an agent reports in its AUTO_BUG_FIX_RESULT/PROPOSAL marker.
 // Only auto-fix means the bug was fixed; the other two mean a human now owns it.
 const (
 	OutcomeAutoFix      = "auto-fix"
 	OutcomeAutoDiagnose = "auto-diagnose"
 	OutcomeNeedsInfo    = "needs-info"
+)
+
+// Verifier verdicts in the AUTO_BUG_FIX_VERIFY marker.
+const (
+	VerdictUphold = "uphold"
+	VerdictRefute = "refute"
 )
 
 type Result struct {
@@ -30,12 +57,30 @@ type Result struct {
 	StartedAt      time.Time
 	CompletedAt    time.Time
 	DurationMillis int64
+
+	// MarkerKind is which marker line was parsed (result/proposal/verify/none).
+	MarkerKind MarkerKind
+	// Phase A PROPOSAL fields — what the agent investigated and would do, before
+	// any write side-effect. The harness uses these to locate and re-derive the
+	// real diff for verification. They are agent-self-reported (see SECURITY notes).
+	Workspace string
+	Branch    string
+	Base      string
+	Head      string
+	Evidence  string
+	// Verifier VERIFY fields.
+	Verdict      string
+	VerifyReason string
 }
 
 type Options struct {
 	Env map[string]string
 	// WaitDelay overrides the post-exit pipe-close delay (default 10s). Mainly for tests.
 	WaitDelay time.Duration
+	// MarkerPrefixes are the stdout marker prefixes the live scanner kills on.
+	// Empty means the default [RESULT] — preserving single-phase behavior. A Phase A
+	// spawn passes [PROPOSAL, RESULT]; the verifier passes [VERIFY].
+	MarkerPrefixes [][]byte
 }
 
 // tailBuffer keeps only the last max bytes written. It is written concurrently:
@@ -130,15 +175,63 @@ func BuildArgs(command, issueKey string) ([]string, error) {
 	return append(tokens, issueKey), nil
 }
 
+// ParseResultMarker parses only the terminal RESULT marker (single-phase / Phase B).
+// Kept as a thin, behavior-stable wrapper so existing callers and tests are unaffected.
 func ParseResultMarker(output string) Result {
+	r := parseMarkerLine(output, []string{ResultMarkerPrefix})
+	if r.MarkerKind == MarkerResult {
+		return r
+	}
+	return Result{}
+}
+
+// ParseMarker scans output bottom-up for the last line matching any known marker
+// prefix (PROPOSAL / VERIFY / RESULT) and fills the matching fields. The marker
+// kind is recorded so callers can branch on it. Last-line-wins mirrors the live
+// scanner's "kill on first marker" semantics.
+func ParseMarker(output string) Result {
+	return parseMarkerLine(output, []string{ProposalMarkerPrefix, VerifyMarkerPrefix, ResultMarkerPrefix})
+}
+
+// parsePrefixesFor maps the scanner's watched byte prefixes (nil => default
+// [RESULT]) to the string prefixes the parser should accept, so a spawn only ever
+// parses the markers it actually watched for — a legacy single-shot run stays
+// RESULT-only and cannot be diverted by a stray PROPOSAL/VERIFY-prefixed line.
+func parsePrefixesFor(prefixes [][]byte) []string {
+	if len(prefixes) == 0 {
+		return []string{ResultMarkerPrefix}
+	}
+	out := make([]string, 0, len(prefixes))
+	for _, p := range prefixes {
+		out = append(out, string(p))
+	}
+	return out
+}
+
+func parseMarkerLine(output string, prefixes []string) Result {
 	var result Result
 	lines := strings.Split(output, "\n")
 	for i := len(lines) - 1; i >= 0; i-- {
 		line := strings.TrimSpace(lines[i])
-		if !strings.HasPrefix(line, ResultMarkerPrefix) {
+		kind, prefix := matchMarkerPrefix(line, prefixes)
+		if kind == MarkerNone {
 			continue
 		}
-		for _, field := range strings.Fields(strings.TrimSpace(strings.TrimPrefix(line, ResultMarkerPrefix))) {
+		// A line with a `<...>` placeholder is a documented example, not a real
+		// marker — skip it, mirroring the live scanner's kill condition.
+		if strings.Contains(line, "<") {
+			continue
+		}
+		result.MarkerKind = kind
+		body := strings.TrimSpace(strings.TrimPrefix(line, prefix))
+		// reason= is free-form (may contain spaces); capture it as the rest of the
+		// line and parse the space-delimited key=value pairs before it. Templates put
+		// reason last.
+		if idx := strings.Index(body, "reason="); idx >= 0 {
+			result.VerifyReason = strings.TrimSpace(body[idx+len("reason="):])
+			body = strings.TrimSpace(body[:idx])
+		}
+		for _, field := range strings.Fields(body) {
 			key, value, ok := strings.Cut(field, "=")
 			if !ok {
 				continue
@@ -150,11 +243,43 @@ func ParseResultMarker(output string) Result {
 				result.MRURL = value
 			case "handoff":
 				result.HandoffPath = value
+			case "workspace":
+				result.Workspace = value
+			case "branch":
+				result.Branch = value
+			case "base":
+				result.Base = value
+			case "head":
+				result.Head = value
+			case "evidence":
+				result.Evidence = value
+			case "verdict":
+				result.Verdict = value
 			}
 		}
 		return result
 	}
 	return result
+}
+
+// matchMarkerPrefix returns the kind/prefix for the first allowed prefix that line
+// starts with. PROPOSAL/VERIFY are checked before RESULT; none are substrings of
+// each other, so order only sets precedence when a line somehow starts with two.
+func matchMarkerPrefix(line string, prefixes []string) (MarkerKind, string) {
+	for _, prefix := range prefixes {
+		if !strings.HasPrefix(line, prefix) {
+			continue
+		}
+		switch prefix {
+		case ProposalMarkerPrefix:
+			return MarkerProposal, prefix
+		case VerifyMarkerPrefix:
+			return MarkerVerify, prefix
+		case ResultMarkerPrefix:
+			return MarkerResult, prefix
+		}
+	}
+	return MarkerNone, ""
 }
 
 func exitCode(err error) int {
@@ -168,18 +293,27 @@ func exitCode(err error) int {
 	return -1
 }
 
-var markerPrefixBytes = []byte(ResultMarkerPrefix)
+var defaultMarkerPrefixes = [][]byte{[]byte(ResultMarkerPrefix)}
 
 // markerScanner watches the live output stream for the agent's completion marker
-// and invokes onMarker once when a line beginning with it is seen. Detection is
-// incremental (newline-delimited, prefix compare), so it adds negligible cost
-// over the byte copy os/exec already performs. It is written concurrently from
-// the stdout and stderr copy goroutines, so all state is mutex-guarded.
+// and invokes onMarker once when a line beginning with any watched prefix is seen.
+// Detection is incremental (newline-delimited, prefix compare), so it adds
+// negligible cost over the byte copy os/exec already performs. It is written
+// concurrently from the stdout and stderr copy goroutines, so all state is
+// mutex-guarded. prefixes==nil means the default [RESULT] (single-phase).
 type markerScanner struct {
 	mu       sync.Mutex
 	pending  []byte
 	seen     bool
+	prefixes [][]byte
 	onMarker func()
+}
+
+func (s *markerScanner) watchedPrefixes() [][]byte {
+	if len(s.prefixes) == 0 {
+		return defaultMarkerPrefixes
+	}
+	return s.prefixes
 }
 
 func (s *markerScanner) Write(p []byte) (int, error) {
@@ -198,8 +332,16 @@ func (s *markerScanner) Write(p []byte) (int, error) {
 			// with `<...>` placeholders (e.g. mr=<MR_URL>); a verbose agent that
 			// echoes that example must not trigger a premature kill. Real markers
 			// carry concrete URLs/paths and never contain angle-bracket placeholders.
-			if bytes.HasPrefix(line, markerPrefixBytes) && !bytes.Contains(line, []byte("<")) {
-				s.seen, trigger = true, true
+			if bytes.Contains(line, []byte("<")) {
+				continue
+			}
+			for _, pfx := range s.watchedPrefixes() {
+				if bytes.HasPrefix(line, pfx) {
+					s.seen, trigger = true, true
+					break
+				}
+			}
+			if trigger {
 				break
 			}
 		}
@@ -253,8 +395,12 @@ func Trigger(issueKey, command string, options ...Options) (Result, error) {
 	// build daemon that inherited our stdout pipe — which would hang cmd.Wait
 	// indefinitely. On the marker we kill the child so Wait returns instead of
 	// waiting for a graceful exit that never comes.
+	var markerPrefixes [][]byte
+	if len(options) > 0 {
+		markerPrefixes = options[0].MarkerPrefixes
+	}
 	var killOnce sync.Once
-	watcher := &markerScanner{onMarker: func() { killOnce.Do(func() { killAgentProcess(cmd) }) }}
+	watcher := &markerScanner{prefixes: markerPrefixes, onMarker: func() { killOnce.Do(func() { killAgentProcess(cmd) }) }}
 	cmd.Stdout = io.MultiWriter(os.Stdout, output, watcher)
 	cmd.Stderr = io.MultiWriter(os.Stderr, output, watcher)
 	// A detached grandchild may still hold the pipe after the child exits; once the
@@ -267,7 +413,7 @@ func Trigger(issueKey, command string, options ...Options) (Result, error) {
 	err = cmd.Run()
 	completedAt := time.Now()
 
-	result := ParseResultMarker(output.String())
+	result := parseMarkerLine(output.String(), parsePrefixesFor(markerPrefixes))
 	result.ExitCode = exitCode(err)
 	// If we saw the completion marker, the agent finished successfully; a non-zero
 	// exit caused by our own marker-triggered kill must not be reported as failure.
