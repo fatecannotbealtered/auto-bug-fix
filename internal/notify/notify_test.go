@@ -8,6 +8,15 @@ import (
 	"github.com/fatecannotbealtered/auto-bug-fix/internal/notify"
 )
 
+func larkChan(t *testing.T) notify.Channel {
+	t.Helper()
+	ch, err := notify.Get("lark")
+	if err != nil {
+		t.Fatalf("lark channel not registered: %v", err)
+	}
+	return ch
+}
+
 func headerTemplate(t *testing.T, cardJSON string) string {
 	t.Helper()
 	var card struct {
@@ -24,8 +33,17 @@ func headerTemplate(t *testing.T, cardJSON string) string {
 	return card.Header.Template
 }
 
+func TestDefaultChannelIsRegistered(t *testing.T) {
+	if _, err := notify.Get(""); err != nil {
+		t.Fatalf("empty channel should default to %q and resolve, got %v", notify.DefaultChannel, err)
+	}
+	if _, err := notify.Get("nope"); err == nil {
+		t.Fatal("unknown channel must error")
+	}
+}
+
 func TestRenderCard_AutoFixIsGreenWithMRButton(t *testing.T) {
-	card, err := notify.RenderCard(notify.Params{
+	card, err := larkChan(t).Render(notify.Params{
 		Issue: "PROJ-1234", Outcome: notify.OutcomeAutoFix, Summary: "导出为空",
 		RootCause: "边界未含", Solution: "改左闭右闭", TestStatus: "fail→pass",
 		MRURL: "https://gl/mr/87", JiraURL: "https://jira/PROJ-1234",
@@ -46,7 +64,7 @@ func TestRenderCard_AutoFixIsGreenWithMRButton(t *testing.T) {
 
 func TestRenderCard_NeedsInfoIsBlueWithNoMRButton(t *testing.T) {
 	// Even if an MR URL is (wrongly) supplied, needs-info must not render an MR button.
-	card, err := notify.RenderCard(notify.Params{
+	card, err := larkChan(t).Render(notify.Params{
 		Issue: "PROJ-9", Outcome: notify.OutcomeNeedsInfo, Solution: "1. ? 2. ?",
 		MRURL: "https://should/not/appear", JiraURL: "https://jira/PROJ-9",
 	})
@@ -68,7 +86,7 @@ func TestRenderCard_NeedsInfoIsBlueWithNoMRButton(t *testing.T) {
 }
 
 func TestRenderCard_AutoDiagnoseIsOrange(t *testing.T) {
-	card, err := notify.RenderCard(notify.Params{Issue: "P-2", Outcome: notify.OutcomeAutoDiagnose, JiraURL: "https://jira/P-2"})
+	card, err := larkChan(t).Render(notify.Params{Issue: "P-2", Outcome: notify.OutcomeAutoDiagnose, JiraURL: "https://jira/P-2"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,23 +99,23 @@ func TestRenderCard_AutoDiagnoseIsOrange(t *testing.T) {
 }
 
 func TestRenderCard_RejectsUnknownOutcome(t *testing.T) {
-	if _, err := notify.RenderCard(notify.Params{Issue: "P-1", Outcome: "bogus"}); err == nil {
+	if _, err := larkChan(t).Render(notify.Params{Issue: "P-1", Outcome: "bogus"}); err == nil {
 		t.Fatal("expected error for unknown outcome")
 	}
 }
 
 func TestSend_ParsesMessageIDAndPicksUserID(t *testing.T) {
 	var gotArgs []string
-	run := func(args ...string) ([]byte, error) {
+	run := func(bin string, args ...string) ([]byte, error) {
 		gotArgs = args
 		return []byte(`{"ok":true,"data":{"message_id":"om_abc","chat_id":"oc_def"}}`), nil
 	}
-	msgID, chatID, err := notify.Send("ou_user1", `{"x":1}`, run)
+	msgID, err := larkChan(t).Send("ou_user1", `{"x":1}`, run)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if msgID != "om_abc" || chatID != "oc_def" {
-		t.Fatalf("parsed wrong ids: %q %q", msgID, chatID)
+	if msgID != "om_abc" {
+		t.Fatalf("parsed wrong id: %q", msgID)
 	}
 	if !contains(gotArgs, "--user-id") {
 		t.Errorf("ou_ recipient should use --user-id, got %v", gotArgs)
@@ -106,11 +124,11 @@ func TestSend_ParsesMessageIDAndPicksUserID(t *testing.T) {
 
 func TestSend_PicksChatIDForOC(t *testing.T) {
 	var gotArgs []string
-	run := func(args ...string) ([]byte, error) {
+	run := func(bin string, args ...string) ([]byte, error) {
 		gotArgs = args
 		return []byte(`{"ok":true,"data":{"message_id":"om_1"}}`), nil
 	}
-	if _, _, err := notify.Send("oc_group1", "{}", run); err != nil {
+	if _, err := larkChan(t).Send("oc_group1", "{}", run); err != nil {
 		t.Fatal(err)
 	}
 	if !contains(gotArgs, "--chat-id") {
@@ -119,16 +137,16 @@ func TestSend_PicksChatIDForOC(t *testing.T) {
 }
 
 func TestSend_OKFalseIsError(t *testing.T) {
-	run := func(args ...string) ([]byte, error) {
+	run := func(bin string, args ...string) ([]byte, error) {
 		return []byte(`{"ok":false,"error":{"message":"chat not found"}}`), nil
 	}
-	if _, _, err := notify.Send("ou_x", "{}", run); err == nil || !strings.Contains(err.Error(), "chat not found") {
+	if _, err := larkChan(t).Send("ou_x", "{}", run); err == nil || !strings.Contains(err.Error(), "chat not found") {
 		t.Fatalf("expected ok:false error to surface, got %v", err)
 	}
 }
 
 func TestSend_EmptyRecipientIsError(t *testing.T) {
-	if _, _, err := notify.Send("", "{}", func(...string) ([]byte, error) { return nil, nil }); err == nil {
+	if _, err := larkChan(t).Send("", "{}", func(string, ...string) ([]byte, error) { return nil, nil }); err == nil {
 		t.Fatal("expected error for empty recipient")
 	}
 }

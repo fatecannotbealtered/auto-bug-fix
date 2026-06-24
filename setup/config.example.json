@@ -29,7 +29,8 @@
     "command": ""
   },
   "notify": {
-    "enabled": false,
+    "enabled": true,
+    "channel": "lark",
     "target": ""
   }
 }

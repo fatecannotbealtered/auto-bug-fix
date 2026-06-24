@@ -161,7 +161,8 @@ Config location: `~/.auto-bug-fix/config.json`.
     "command": ""
   },
   "notify": {
-    "enabled": false,
+    "enabled": true,
+    "channel": "lark",
     "target": ""
   }
 }
@@ -180,8 +181,9 @@ Config location: `~/.auto-bug-fix/config.json`.
 | `knowledge.*` | see JSON | Repo-local business knowledge settings passed to the spawned agent. |
 | `verify.enabled` | `false` | Two-phase pre-write gate. When on, an auto-fix first investigates and commits **locally** (no writes), an independent read-only verifier reviews the evidence chain against the real diff, and only an upheld proposal proceeds to open the MR; a refuted or integrity-failed proposal is downgraded to auto-diagnose with no MR. Costs 2-3 agent spawns per auto-fix. |
 | `verify.command` | derived | Read-only verifier launch command; derived at runtime for a known agentType, required for a custom agent. The verify phase's read-only posture is template+prompt convention, not a sandbox. |
-| `notify.enabled` | `false` | Send a one-way Lark (Feishu) completion card via `lark-cli` after each fix. Opt-in. |
-| `notify.target` | empty | Fallback Lark recipient (`chat_id`/`open_id`) when the Jira assignee can't be resolved. No secrets — `lark-cli` owns Lark auth. |
+| `notify.enabled` | `true` | Send a one-way completion card after each fix. On by default: the completion notification is the required human-in-the-loop hand-off, not a nicety. |
+| `notify.channel` | `lark` | Notification backend. Only `lark` (Lark/Feishu interactive card via `lark-cli`) is implemented today; the abstraction allows adding more later. |
+| `notify.target` | empty | **Required when `notify.enabled` is true.** Fallback recipient (`chat_id`/`open_id`) when the Jira assignee can't be resolved. No secrets — `lark-cli` owns Lark auth. |
 
 State lives at `~/.auto-bug-fix/state.json`; logs at `~/.auto-bug-fix/poller.log`; the PID file at `~/.auto-bug-fix/poller.pid`.
 

@@ -75,6 +75,7 @@ type KnowledgeConfig struct {
 // recipient when the Jira assignee cannot be resolved.
 type NotifyConfig struct {
 	Enabled bool   `json:"enabled"`
+	Channel string `json:"channel"`
 	Target  string `json:"target"`
 }
 
@@ -301,6 +302,13 @@ func Validate(cfg Config) error {
 	// explicitly when the gate is on. A known agentType derives it at runtime.
 	if cfg.Verify.Enabled && strings.TrimSpace(cfg.Verify.Command) == "" && !KnownAgentType(cfg.Agent.AgentType) {
 		return fmt.Errorf("verify.command is required when verify.enabled is true and agentType is custom")
+	}
+	// The completion notification is the human hand-off at this stage, so when it
+	// is enabled a guaranteed fallback recipient is required: the agent normally
+	// resolves the Jira assignee at runtime, but notify.target must exist so a run
+	// always has somewhere to deliver to.
+	if cfg.Notify.Enabled && strings.TrimSpace(cfg.Notify.Target) == "" {
+		return fmt.Errorf("notify.target is required when notify.enabled is true (fallback recipient); set notify.target or set notify.enabled=false")
 	}
 	return nil
 }

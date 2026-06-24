@@ -161,7 +161,8 @@ auto-bug-fix update --compact           # 一次完成 包 + Skill 更新（无 
     "command": ""
   },
   "notify": {
-    "enabled": false,
+    "enabled": true,
+    "channel": "lark",
     "target": ""
   }
 }
@@ -180,8 +181,9 @@ auto-bug-fix update --compact           # 一次完成 包 + Skill 更新（无 
 | `knowledge.*` | 见 JSON | 传给 spawned agent 的仓库内业务知识配置。 |
 | `verify.enabled` | `false` | 两阶段事前守门：开启后 auto-fix 先「调查 + 本地 commit（不写）」，再由独立只读 verifier 复核证据链，通过才开 MR；被否或完整性校验失败则降级为 auto-diagnose、不开 MR。代价是每个 auto-fix 变 2–3 次 agent 调用。 |
 | `verify.command` | 推导 | 只读 verifier 的启动命令；已知 agentType 运行时推导，自定义 agent 必填。验证阶段的只读为模板 + prompt 约定级（非沙箱隔离）。 |
-| `notify.enabled` | `false` | 修复后通过 `lark-cli` 给 Jira 跟进人发一张单向飞书完成卡片。默认关闭，需显式开启。 |
-| `notify.target` | 空 | 当 Jira 经办人解析不到时的兜底飞书接收者（`chat_id`/`open_id`）。不放密钥——飞书认证归 `lark-cli`。 |
+| `notify.enabled` | `true` | 修复后发一张单向完成卡片。默认开启：完成通知是必需的 human-in-the-loop 交接环节，而非可有可无。 |
+| `notify.channel` | `lark` | 通知后端。目前仅实现 `lark`（通过 `lark-cli` 发飞书交互卡片）；该抽象为后续接入更多渠道预留。 |
+| `notify.target` | 空 | **当 `notify.enabled` 为 true 时必填。** 当 Jira 经办人解析不到时的兜底接收者（`chat_id`/`open_id`）。不放密钥——飞书认证归 `lark-cli`。 |
 
 状态文件在 `~/.auto-bug-fix/state.json`；日志在 `~/.auto-bug-fix/poller.log`；PID 文件在 `~/.auto-bug-fix/poller.pid`。
 

@@ -253,10 +253,11 @@ All tests pass (fail-to-pass + pass-to-pass). Awaiting review.
 
 ### Step 8.5 — Send the completion notification (only when enabled)
 
-The poller injects two settings:
+The poller injects three settings:
 
-- `AUTO_BUG_FIX_NOTIFY_ENABLED` — send a Lark (Feishu) completion card after the run, default `false`.
-- `AUTO_BUG_FIX_NOTIFY_TARGET` — a fallback Lark recipient (`chat_id` / `open_id`); may be empty.
+- `AUTO_BUG_FIX_NOTIFY_ENABLED` — send a completion card after the run, default `true`.
+- `AUTO_BUG_FIX_NOTIFY_TARGET` — a fallback recipient (`chat_id` / `open_id`); may be empty.
+- `AUTO_BUG_FIX_NOTIFY_CHANNEL` — the notification channel (default `lark`).
 
 If `AUTO_BUG_FIX_NOTIFY_ENABLED` is not `true`, skip this step entirely.
 
@@ -279,7 +280,7 @@ When enabled, the card is **rendered and sent by `auto-bug-fix` itself** — you
 
    Kibana/Archery evidence is shown as text via `--evidence` — a one-click deep link is pending kibana-cli (#11); do **not** hand-build a fragile URL.
 
-This step is **best-effort**: if `auto-bug-fix notify` or the recipient resolution fails, **log it and continue — never retry it into the fix, never change the outcome, never fail the run.** The result is already recorded in Jira and the MR.
+This step is **best-effort for the run's outcome**: **never change the outcome, never fail the run** — the result is already recorded in Jira and the MR. The `auto-bug-fix notify` command already retries once internally, so **do not add your own retry loop**. But a failed send must not be silent: if `auto-bug-fix notify` or the recipient resolution fails, **loudly record in the Jira comment / hand-off that the completion notification was NOT delivered (通知未送达)** so a human can see it and follow up.
 
 ## Failure Handling
 

@@ -210,6 +210,19 @@ func TestValidate_HappyPath(t *testing.T) {
 	}
 }
 
+func TestValidate_NotifyEnabledRequiresTarget(t *testing.T) {
+	cfg := validConfig()
+	cfg.Notify.Enabled = true
+	cfg.Notify.Target = ""
+	if err := config.Validate(cfg); err == nil {
+		t.Fatal("notify.enabled with empty target must fail validation")
+	}
+	cfg.Notify.Target = "oc_chat"
+	if err := config.Validate(cfg); err != nil {
+		t.Fatalf("notify.enabled with a target should pass, got %v", err)
+	}
+}
+
 func TestValidate_HappyPath_EmptyFilter(t *testing.T) {
 	// filter is fully optional — empty filter is valid
 	cfg := validConfig()

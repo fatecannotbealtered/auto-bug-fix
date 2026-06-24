@@ -337,7 +337,8 @@ func defaultConfig(agentType string) map[string]any {
 			"handoffDir": config.DefaultKnowledgeHandoffDir,
 		},
 		"notify": map[string]any{
-			"enabled": false,
+			"enabled": true,
+			"channel": "lark",
 			"target":  "",
 		},
 	}
@@ -611,12 +612,13 @@ func fixResultData(issueKey string, result agent.Result) map[string]any {
 
 // ── notify ─────────────────────────────────────────────────────────────────────
 
-// larkRunner runs lark-cli and returns stdout, keeping stdout even on a non-zero
-// exit so the JSON envelope (which lark-cli prints on failure too) stays parseable.
-func larkRunner(args ...string) ([]byte, error) {
+// cliRunner runs a channel's delivery CLI (bin) and returns stdout, keeping
+// stdout even on a non-zero exit so a JSON envelope (which the CLI prints on
+// failure too) stays parseable.
+func cliRunner(bin string, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "lark-cli", args...).Output() //nolint:gosec
+	out, err := exec.CommandContext(ctx, bin, args...).Output() //nolint:gosec
 	if len(out) > 0 {
 		return out, nil
 	}
@@ -644,6 +646,7 @@ func runNotify(args []string) {
 	duration := fs.String("duration", "", "run duration (footer)")
 	evidence := fs.String("evidence", "", "evidence note, e.g. Kibana logs / Archery data")
 	testStatus := fs.String("test-status", "", "test status line (auto-fix)")
+	channel := fs.String("channel", "", "notification channel (default: lark); falls back to $AUTO_BUG_FIX_NOTIFY_CHANNEL")
 	dryRun := fs.Bool("dry-run", false, "render and preview the card without sending")
 	if err := fs.Parse(args); err != nil {
 		fail(exitUsage, "E_USAGE", "notify: "+err.Error(), nil, false)
@@ -654,7 +657,15 @@ func runNotify(args []string) {
 	if !notify.ValidOutcome(*outcome) {
 		fail(exitUsage, "E_VALIDATION", "notify: --outcome must be auto-fix, auto-diagnose, or needs-info", nil, false)
 	}
-	card, err := notify.RenderCard(notify.Params{
+	chName := strings.TrimSpace(*channel)
+	if chName == "" {
+		chName = strings.TrimSpace(os.Getenv("AUTO_BUG_FIX_NOTIFY_CHANNEL"))
+	}
+	ch, err := notify.Get(chName)
+	if err != nil {
+		fail(exitUsage, "E_VALIDATION", "notify: "+err.Error(), nil, false)
+	}
+	card, err := ch.Render(notify.Params{
 		Issue: *issue, Outcome: *outcome, Summary: *summary,
 		RootCause: *rootCause, Solution: *solution, MRURL: *mrURL, JiraURL: *jiraURL,
 		Service: *service, Branch: *branch, Duration: *duration,
@@ -684,14 +695,25 @@ func runNotify(args []string) {
 	if recipient == "" {
 		fail(exitUsage, "E_VALIDATION", "notify: no recipient — pass --to <open_id/chat_id> or set notify.target", nil, false)
 	}
-	messageID, chatID, serr := notify.Send(recipient, card, larkRunner)
+	var messageID string
+	var serr error
+	for attempt := 1; attempt <= 2; attempt++ {
+		messageID, serr = ch.Send(recipient, card, cliRunner)
+		if serr == nil {
+			break
+		}
+		if attempt < 2 {
+			log.Printf("[auto-bug-fix] notify: %s send attempt %d failed: %v — retrying once", ch.Name(), attempt, serr)
+		}
+	}
 	if serr != nil {
-		fail(exitGeneric, "E_RUNTIME", "notify: send failed: "+serr.Error(), nil, false)
+		log.Printf("[auto-bug-fix] notify: WARNING %s notification NOT delivered to %s after 2 attempts: %v", ch.Name(), recipient, serr)
+		fail(exitGeneric, "E_RUNTIME", "notify: send failed after 2 attempts via "+ch.Name()+": "+serr.Error(), nil, false)
 	}
 	printJSON(map[string]any{
 		"sent":      true,
+		"channel":   ch.Name(),
 		"messageId": messageID,
-		"chatId":    chatID,
 		"recipient": recipient,
 		"outcome":   *outcome,
 	})
