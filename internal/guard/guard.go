@@ -156,9 +156,9 @@ func runVerifier(issueKey string, proposal agent.Result, spawn SpawnFunc) (agent
 		return agent.Result{}, err
 	}
 	diffPath := f.Name()
-	defer os.Remove(diffPath)
+	defer func() { _ = os.Remove(diffPath) }()
 	if _, err := f.WriteString(diff); err != nil {
-		f.Close()
+		_ = f.Close()
 		return agent.Result{}, err
 	}
 	if err := f.Close(); err != nil {
