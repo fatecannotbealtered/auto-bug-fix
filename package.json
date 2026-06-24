@@ -1,6 +1,6 @@
 {
   "name": "@fateforge/auto-bug-fix",
-  "version": "1.0.10",
+  "version": "1.0.11",
   "description": "Autonomous Jira DC + GitLab bug-fix scheduler — polls Jira for Bugs and dispatches each to your configured AI agent",
   "keywords": [
     "jira",
@@ -33,12 +33,12 @@
     "check-version": "node scripts/check-version.js"
   },
   "optionalDependencies": {
-    "@fateforge/auto-bug-fix-darwin-arm64": "1.0.10",
-    "@fateforge/auto-bug-fix-darwin-x64": "1.0.10",
-    "@fateforge/auto-bug-fix-linux-arm64": "1.0.10",
-    "@fateforge/auto-bug-fix-linux-x64": "1.0.10",
-    "@fateforge/auto-bug-fix-win32-arm64": "1.0.10",
-    "@fateforge/auto-bug-fix-win32-x64": "1.0.10"
+    "@fateforge/auto-bug-fix-darwin-arm64": "1.0.11",
+    "@fateforge/auto-bug-fix-darwin-x64": "1.0.11",
+    "@fateforge/auto-bug-fix-linux-arm64": "1.0.11",
+    "@fateforge/auto-bug-fix-linux-x64": "1.0.11",
+    "@fateforge/auto-bug-fix-win32-arm64": "1.0.11",
+    "@fateforge/auto-bug-fix-win32-x64": "1.0.11"
   },
   "files": [
     "scripts/run.js",

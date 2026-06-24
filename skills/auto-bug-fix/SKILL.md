@@ -1,10 +1,10 @@
 ---
 name: auto-bug-fix
-version: 1.0.10
+version: 1.0.11
 description: "auto-bug-fix CLI for AI Agents operating an autonomous Jira Bug fix scheduler. Use for installing, configuring, preflighting, starting, stopping, updating, and auditing the scheduler; not for performing the per-ticket code repair directly."
 license: MIT
 user-invocable: true
-metadata: {"requires":{"bins":["auto-bug-fix"],"min_version":"1.0.10"}}
+metadata: {"requires":{"bins":["auto-bug-fix"],"min_version":"1.0.11"}}
 ---
 
 # auto-bug-fix

@@ -73,11 +73,13 @@ type Channel interface {
 	// DoctorBin is the external CLI that doctor health-checks for this channel
 	// (e.g. "lark-cli"), or "" when the channel needs no external binary.
 	DoctorBin() string
-	// DoctorArgs are the args to run that CLI's own health check (e.g.
-	// {"doctor"}); exit 0 means usable. Channels emit different doctor output
-	// formats, so doctor relies on the exit status, not a shared JSON envelope
-	// (lark-cli, unlike the sibling jira/gitlab CLIs, has no --json authValid).
-	DoctorArgs() []string
+	// Healthy reports whether the channel's delivery CLI is usable, using run to
+	// invoke it. Each channel owns its own doctor contract (flags + output shape):
+	// delivery CLIs are not all fateforge siblings — e.g. lark-cli rejects --json
+	// and emits a flat {ok, checks:[...]} rather than the {data:{authValid}}
+	// envelope — so the channel, not doctor, parses its own health. detail is a
+	// human-readable status (e.g. "ready", or a fix hint when not ok).
+	Healthy(run Runner) (ok bool, detail string)
 	// Render turns channel-neutral Params into this channel's send payload.
 	Render(p Params) (payload string, err error)
 	// Send delivers payload to recipient, using run to invoke the delivery CLI.

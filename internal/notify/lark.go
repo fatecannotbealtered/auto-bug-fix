@@ -17,9 +17,27 @@ func init() { register(larkChannel{}) }
 
 type larkChannel struct{}
 
-func (larkChannel) Name() string         { return "lark" }
-func (larkChannel) DoctorBin() string    { return "lark-cli" }
-func (larkChannel) DoctorArgs() []string { return []string{"doctor"} }
+func (larkChannel) Name() string      { return "lark" }
+func (larkChannel) DoctorBin() string { return "lark-cli" }
+
+// Healthy runs `lark-cli doctor` (lark-cli is not a fateforge sibling: it rejects
+// --json and emits a flat {ok, checks:[{name,status}], _notice}). It trusts the
+// authoritative top-level `ok` that lark-cli computes for itself; the _notice
+// update hint is non-fatal and ignored. The runner returns stdout even on a
+// non-zero exit, so an unhealthy CLI still yields parseable {ok:false}.
+func (larkChannel) Healthy(run Runner) (bool, string) {
+	out, _ := run("lark-cli", "doctor")
+	var resp struct {
+		OK bool `json:"ok"`
+	}
+	if err := json.Unmarshal(out, &resp); err != nil {
+		return false, "not usable; run `lark-cli doctor`"
+	}
+	if !resp.OK {
+		return false, "not authenticated; run `lark-cli auth login`"
+	}
+	return true, "ready"
+}
 
 type headerStyle struct{ color, title string }
 

@@ -7,6 +7,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [1.0.11] - 2026-06-24
+
+### Fixed
+
+- **An unusable/misconfigured notification CLI no longer blocks `fix`/`start`, and a healthy `lark-cli` is no longer misreported as unusable.** `doctor` health-checked the notify channel through the fateforge sibling contract (`<cli> doctor --json --quiet` + a `{data:{authValid}}` envelope), but `lark-cli` is not a sibling: it rejects `--json` and emits a flat `{ok, checks:[{name,status}], _notice}`. So a healthy, authenticated Lark CLI was judged "not usable", and because the notify check was a hard `Fail` it tripped the preflight gate — `fix`/`start`/`start --detach` exited `E_CONFIG` without ever spawning the agent. Channels now self-report health via a new `Channel.Healthy(run)` (Lark runs `lark-cli doctor` with no `--json` and trusts lark-cli's own top-level `ok`, ignoring the update `_notice`), and the notify check is **advisory**: an unusable channel shows as a `Warn` in `doctor` but never blocks a running fix (notifications are best-effort). The fateforge siblings (jira/gitlab/kibana/archery) keep the `doctor --json` capability check unchanged. Tests now feed lark-cli's real flat doctor shape and assert the check never passes `--json`.
+
 ## [1.0.10] - 2026-06-24
 
 ### Added

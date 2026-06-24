@@ -90,6 +90,12 @@ func cfgWith(command, agentType string) config.Config {
 
 const authOK = `{"authValid":true,"host":"https://jira.example.com"}`
 
+// lark-cli is NOT a fateforge sibling: its `doctor` ignores --json and emits a
+// flat {ok, checks, _notice} (no data/authValid envelope). These fixtures use that
+// REAL shape — the v1.0.10 bug was that tests fed the fateforge authOK shape.
+const larkOK = `{"ok":true,"checks":[{"name":"identity_ready","status":"pass"}],"_notice":{"update":{"message":"1.0.57 available"}}}`
+const larkUnauthed = `{"ok":false,"checks":[{"name":"identity_ready","status":"fail"}]}`
+
 func allPresent() map[string]bool {
 	return map[string]bool{"kiro-cli": true, "git": true, "jira-cli": true, "gitlab-cli": true, "kibana-cli": true}
 }
@@ -354,7 +360,7 @@ func TestRun_NotifyEnabledLarkUsableOK(t *testing.T) {
 	present := allPresent()
 	present["lark-cli"] = true
 	probe := allAuthed()
-	probe["lark-cli"] = authOK
+	probe["lark-cli"] = larkOK
 	checks := Run(cfg, nil, lookFake(present), probeFake(probe), tmplInstalled, skillsInstalled)
 	if HasFailure(checks) {
 		t.Fatalf("notify must pass when lark-cli is present and authed, got %+v", checks)
@@ -364,17 +370,72 @@ func TestRun_NotifyEnabledLarkUsableOK(t *testing.T) {
 	}
 }
 
-func TestRun_NotifyEnabledLarkMissingFails(t *testing.T) {
+func TestRun_NotifyEnabledLarkMissingIsAdvisory(t *testing.T) {
 	cfg := cfgWith("kiro-cli", "kiro")
 	cfg.Notify.Enabled = true
-	// allPresent() has no lark-cli, so the binary is absent. The notification is a
-	// required hand-off now, so an unusable channel CLI must FAIL, not warn.
+	// allPresent() has no lark-cli, so the binary is absent. Notifications are
+	// best-effort, so a missing channel CLI is advisory (Warn) and must NOT block.
 	checks := Run(cfg, nil, lookFake(allPresent()), probeFake(allAuthed()), tmplInstalled, skillsInstalled)
-	if !HasFailure(checks) {
-		t.Fatalf("missing lark-cli must fail when notify is enabled, got %+v", checks)
+	if HasFailure(checks) {
+		t.Fatalf("a missing notify CLI must not block fix (advisory), got %+v", checks)
 	}
-	if got := levelOf(checks, "lark-cli"); got != Fail {
-		t.Errorf("lark-cli should Fail when missing and notify enabled, got %v", got)
+	if got := levelOf(checks, "lark-cli"); got != Warn {
+		t.Errorf("missing lark-cli should Warn when notify enabled, got %v", got)
+	}
+}
+
+func TestRun_NotifyLarkUnauthenticatedDoesNotBlock(t *testing.T) {
+	cfg := cfgWith("kiro-cli", "kiro")
+	cfg.Notify.Enabled = true
+	present := allPresent()
+	present["lark-cli"] = true
+	probe := allAuthed()
+	probe["lark-cli"] = larkUnauthed
+	checks := Run(cfg, nil, lookFake(present), probeFake(probe), tmplInstalled, skillsInstalled)
+	if HasFailure(checks) {
+		t.Fatalf("an unauthenticated lark-cli must not block fix (advisory), got %+v", checks)
+	}
+	if got := levelOf(checks, "lark-cli"); got != Warn {
+		t.Errorf("unauthenticated lark-cli should Warn, got %v", got)
+	}
+}
+
+func TestRun_NotifyLarkDoctorGetsNoJSONFlag(t *testing.T) {
+	// Regression guard: lark-cli rejects --json; the channel health check must run
+	// `lark-cli doctor` with NO --json (the v1.0.10 bug passed --json and broke it).
+	cfg := cfgWith("kiro-cli", "kiro")
+	cfg.Notify.Enabled = true
+	present := allPresent()
+	present["lark-cli"] = true
+	probe := func(bin string, args ...string) ([]byte, error) {
+		if bin == "lark-cli" {
+			for _, a := range args {
+				if a == "--json" {
+					return nil, errors.New("unknown flag --json")
+				}
+			}
+			return []byte(larkOK), nil
+		}
+		return []byte(authOK), nil
+	}
+	checks := Run(cfg, nil, lookFake(present), probe, tmplInstalled, skillsInstalled)
+	if got := levelOf(checks, "lark-cli"); got != OK {
+		t.Errorf("lark-cli health check must not pass --json; got level %v", got)
+	}
+}
+
+func TestRun_NotifyUnknownChannelIsAdvisory(t *testing.T) {
+	// A misconfigured notify.channel (notify.Get fails) must also be advisory —
+	// surfaced as a Warn but never blocking the fix.
+	cfg := cfgWith("kiro-cli", "kiro")
+	cfg.Notify.Enabled = true
+	cfg.Notify.Channel = "nonexistent"
+	checks := Run(cfg, nil, lookFake(allPresent()), probeFake(allAuthed()), tmplInstalled, skillsInstalled)
+	if HasFailure(checks) {
+		t.Fatalf("unknown notify channel must not block fix (advisory), got %+v", checks)
+	}
+	if got := levelOf(checks, "notify"); got != Warn {
+		t.Errorf("unknown notify channel should Warn, got %v", got)
 	}
 }
 

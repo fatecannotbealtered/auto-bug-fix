@@ -161,16 +161,16 @@ func Run(cfg config.Config, cfgErr error, look LookPath, probe Probe, tmpl Templ
 	}
 	checks = append(checks, filterScopeCheck(cfg.Poll.Filter))
 
-	// Completion-notification preflight: when enabled, the channel's delivery CLI
-	// must be present AND usable (authenticated + connected) via its own
-	// `doctor --json`. The notification is a required hand-off at this stage, so an
-	// unusable channel is a Fail, not a warning.
+	// Completion-notification preflight: when enabled, surface whether the
+	// channel's delivery CLI is usable via the channel's own Healthy() check.
+	// Notifications are best-effort, so a broken channel is advisory (Warn) — it is
+	// visible in doctor but must NEVER block a running fix (preflight ignores Warn).
 	if cfg.Notify.Enabled {
 		ch, cerr := notify.Get(cfg.Notify.Channel)
 		if cerr != nil {
-			checks = append(checks, Check{"notify", Fail, cerr.Error()})
+			checks = append(checks, Check{"notify", Warn, cerr.Error()})
 		} else if bin := ch.DoctorBin(); bin != "" {
-			checks = append(checks, capabilityCheck(look, probe, bin, true))
+			checks = append(checks, channelHealthCheck(look, probe, ch, bin))
 		}
 	}
 
@@ -256,6 +256,23 @@ func capabilityCheck(look LookPath, probe Probe, bin string, required bool) Chec
 		return Check{bin, failLevel(required), "not usable; run `" + bin + " doctor`"}
 	}
 	return Check{bin, failLevel(required), "not authenticated; run `" + authLoginCommand(bin) + "`"}
+}
+
+// channelHealthCheck verifies a notification channel's delivery CLI via the
+// channel's own Healthy() check, since delivery CLIs don't all follow the
+// fateforge `doctor --json` + authValid contract (e.g. lark-cli rejects --json
+// and emits a flat {ok, checks}). The result is advisory — Warn, never Fail — so
+// an unusable notification CLI is visible in doctor but never blocks a running
+// fix (notifications are best-effort).
+func channelHealthCheck(look LookPath, probe Probe, ch notify.Channel, bin string) Check {
+	if _, err := look(bin); err != nil {
+		return Check{bin, Warn, "not found on PATH"}
+	}
+	ok, detail := ch.Healthy(notify.Runner(probe))
+	if !ok {
+		return Check{bin, Warn, detail}
+	}
+	return Check{bin, OK, detail}
 }
 
 func authLoginCommand(bin string) string {
