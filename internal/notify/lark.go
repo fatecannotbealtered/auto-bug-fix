@@ -17,8 +17,9 @@ func init() { register(larkChannel{}) }
 
 type larkChannel struct{}
 
-func (larkChannel) Name() string      { return "lark" }
-func (larkChannel) DoctorBin() string { return "lark-cli" }
+func (larkChannel) Name() string         { return "lark" }
+func (larkChannel) DoctorBin() string    { return "lark-cli" }
+func (larkChannel) DoctorArgs() []string { return []string{"doctor"} }
 
 type headerStyle struct{ color, title string }
 
@@ -26,18 +27,21 @@ var headerByOutcome = map[string]headerStyle{
 	OutcomeAutoFix:      {"green", "✅ 已修复，待你评审"},
 	OutcomeAutoDiagnose: {"orange", "🔍 已定位，需人工处理"},
 	OutcomeNeedsInfo:    {"blue", "❓ 需要你补充信息"},
+	OutcomeNeedsReview:  {"grey", "⚠️ 机器人已运行，请人工核对"},
 }
 
 var actionLineByOutcome = map[string]string{
 	OutcomeAutoFix:      "👉 **下一步：评审并合并下方 MR**",
 	OutcomeAutoDiagnose: "👉 **下一步：按下方诊断人工处理**（未自动改代码，未开 MR）",
 	OutcomeNeedsInfo:    "👉 **下一步：在 Jira 回答下列问题**（机器人不会自行猜测，未开 MR）",
+	OutcomeNeedsReview:  "👉 **下一步：到 Jira / GitLab 核对本次运行结果**（机器人未回传结构化结果）",
 }
 
 var solutionLabelByOutcome = map[string]string{
 	OutcomeAutoFix:      "解决方案",
 	OutcomeAutoDiagnose: "诊断与建议",
 	OutcomeNeedsInfo:    "待确认",
+	OutcomeNeedsReview:  "说明",
 }
 
 func larkMD(content string) map[string]any {

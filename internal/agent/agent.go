@@ -60,6 +60,11 @@ type Result struct {
 
 	// MarkerKind is which marker line was parsed (result/proposal/verify/none).
 	MarkerKind MarkerKind
+	// NoMarker is set when the process finished cleanly (exit 0, possibly via a
+	// post-exit WaitDelay on a leaked pipe) but never printed a completion marker.
+	// It distinguishes "completed, outcome unknown" from a genuine failure so a
+	// caller can send a fallback notification instead of reporting the fix failed.
+	NoMarker bool
 	// Phase A PROPOSAL fields — what the agent investigated and would do, before
 	// any write side-effect. The harness uses these to locate and re-derive the
 	// real diff for verification. They are agent-self-reported (see SECURITY notes).
@@ -415,11 +420,25 @@ func Trigger(issueKey, command string, options ...Options) (Result, error) {
 
 	result := parseMarkerLine(output.String(), parsePrefixesFor(markerPrefixes))
 	result.ExitCode = exitCode(err)
-	// If we saw the completion marker, the agent finished successfully; a non-zero
-	// exit caused by our own marker-triggered kill must not be reported as failure.
-	if watcher.found() {
+	// Classify the run into three outcomes:
+	//   (a) marker seen      — the agent finished its workflow; a non-zero exit
+	//       from our own marker-triggered kill must not be reported as failure.
+	//   (b) no marker, clean — the process exited cleanly (exit 0, or only a
+	//       leaked pipe tripped WaitDelay after a 0 exit) but never printed a
+	//       marker: completed with an unknown outcome, NOT a failure. Callers use
+	//       NoMarker to send a fallback notification / avoid a permanent fail.
+	//   (c) no marker, error — a genuine non-zero exit or spawn error: a failure.
+	// ErrWaitDelay is only returned when the process already exited with code 0 but
+	// its I/O didn't finish in time, so treating it as a clean exit is safe.
+	cleanExit := err == nil || errors.Is(err, exec.ErrWaitDelay)
+	switch {
+	case watcher.found():
 		err = nil
 		result.ExitCode = 0
+	case cleanExit:
+		err = nil
+		result.ExitCode = 0
+		result.NoMarker = true
 	}
 	result.StartedAt = startedAt
 	result.CompletedAt = completedAt

@@ -27,7 +27,7 @@ import (
 )
 
 // version is overridden at release time via -ldflags "-X .../cmd.version=<tag>".
-var version = "1.0.9"
+var version = "1.0.10"
 
 const schemaVersion = "1.0"
 
@@ -456,7 +456,11 @@ func runStart(args []string) {
 	log.Printf("[auto-bug-fix] Workspace root: %s (cleanup=%s)", cfg.Workspace.Root, cfg.Workspace.Cleanup)
 	log.Printf("[auto-bug-fix] Knowledge dir: %s (read=%t update=%t handoff=%t handoffDir=%s)", cfg.Knowledge.Dir, cfg.Knowledge.Read, cfg.Knowledge.Update, cfg.Knowledge.Handoff, cfg.Knowledge.HandoffDir)
 	log.Printf("[auto-bug-fix] Verify gate: enabled=%t", cfg.Verify.Enabled)
-	poller.Run(ctx, jira, trigger, st, cfg.Poll.Filter, interval, statePath, cfg.Poll.MaxConcurrent, cfg.Poll.StateExpiryDays)
+	var notifier poller.Notifier
+	if cfg.Notify.Enabled {
+		notifier = fallbackNotifier{cfg: cfg}
+	}
+	poller.Run(ctx, jira, trigger, st, cfg.Poll.Filter, interval, statePath, cfg.Poll.MaxConcurrent, cfg.Poll.StateExpiryDays, notifier)
 	log.Println("[auto-bug-fix] Stopped.")
 }
 
@@ -580,6 +584,16 @@ func runFix(issueKey string, args []string) {
 	if err != nil {
 		failErr("fix", err)
 	}
+	// No marker means the agent finished but didn't run its own Step 8.5 notify,
+	// so send a degraded completion card ourselves — the notification must not
+	// silently depend on agent compliance. Best-effort; never fail the fix on it.
+	if result.NoMarker && cfg.Notify.Enabled {
+		if nerr := sendFallbackCard(cfg, issueKey, cliRunner); nerr != nil {
+			log.Printf("[auto-bug-fix] WARNING fallback notification not delivered for %s: %v", issueKey, nerr)
+		} else {
+			log.Printf("[auto-bug-fix] fallback notification sent for %s (agent printed no marker)", issueKey)
+		}
+	}
 	log.Printf("[auto-bug-fix] Done: %s", issueKey)
 	if !wantsText() {
 		printJSON(fixResultData(issueKey, result))
@@ -625,6 +639,47 @@ func cliRunner(bin string, args ...string) ([]byte, error) {
 	return out, err
 }
 
+// sendFallbackCard sends a degraded "needs-review" completion card itself, for
+// when the agent finished without printing a marker (so it almost certainly did
+// not run its own Step 8.5 notify). Best-effort: the caller logs and continues —
+// a notify failure must never fail a fix that already succeeded remotely.
+func sendFallbackCard(cfg config.Config, issueKey string, run notify.Runner) error {
+	ch, err := notify.Get(cfg.Notify.Channel)
+	if err != nil {
+		return err
+	}
+	card, err := ch.Render(notify.Params{Issue: issueKey, Outcome: notify.OutcomeNeedsReview})
+	if err != nil {
+		return err
+	}
+	recipient := strings.TrimSpace(cfg.Notify.Target)
+	if recipient == "" {
+		recipient = strings.TrimSpace(os.Getenv("AUTO_BUG_FIX_NOTIFY_TARGET"))
+	}
+	if recipient == "" {
+		return fmt.Errorf("no recipient (set notify.target or $AUTO_BUG_FIX_NOTIFY_TARGET)")
+	}
+	var serr error
+	for attempt := 1; attempt <= 2; attempt++ {
+		if _, serr = ch.Send(recipient, card, run); serr == nil {
+			return nil
+		}
+	}
+	return serr
+}
+
+// fallbackNotifier adapts sendFallbackCard to poller.Notifier, so the unattended
+// poll loop also sends a degraded card when an agent finishes without a marker.
+type fallbackNotifier struct{ cfg config.Config }
+
+func (f fallbackNotifier) Notify(issueKey string, _ agent.Result) {
+	if err := sendFallbackCard(f.cfg, issueKey, cliRunner); err != nil {
+		log.Printf("[auto-bug-fix] WARNING fallback notification not delivered for %s: %v", issueKey, err)
+	} else {
+		log.Printf("[auto-bug-fix] fallback notification sent for %s (agent printed no marker)", issueKey)
+	}
+}
+
 // runNotify renders the fixed completion card from flat fields and sends it via
 // lark-cli. The card layout is owned by internal/notify (not the agent), so the
 // style is identical across runs. It is agent-invoked at Step 8.5 and is exempt
@@ -653,6 +708,9 @@ func runNotify(args []string) {
 	}
 	if strings.TrimSpace(*issue) == "" || strings.TrimSpace(*outcome) == "" {
 		fail(exitUsage, "E_VALIDATION", "notify: --issue and --outcome are required", nil, false)
+	}
+	if *outcome == notify.OutcomeNeedsReview {
+		fail(exitUsage, "E_VALIDATION", "notify: --outcome needs-review is internal-only (the fix fallback uses it)", nil, false)
 	}
 	if !notify.ValidOutcome(*outcome) {
 		fail(exitUsage, "E_VALIDATION", "notify: --outcome must be auto-fix, auto-diagnose, or needs-info", nil, false)

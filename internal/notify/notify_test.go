@@ -98,6 +98,37 @@ func TestRenderCard_AutoDiagnoseIsOrange(t *testing.T) {
 	}
 }
 
+func TestRenderCard_NeedsReviewIsGreyForFallback(t *testing.T) {
+	// The degraded fallback card auto-bug-fix sends itself when the agent finished
+	// without a marker: grey header, a "verify manually" action line, no MR button.
+	card, err := larkChan(t).Render(notify.Params{
+		Issue: "PROJ-7", Outcome: notify.OutcomeNeedsReview, JiraURL: "https://jira/PROJ-7",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := headerTemplate(t, card); got != "grey" {
+		t.Errorf("needs-review header should be grey, got %q", got)
+	}
+	if !strings.Contains(card, "核对") {
+		t.Errorf("needs-review card should prompt manual verification, got %s", card)
+	}
+	if strings.Contains(card, "评审 MR") {
+		t.Errorf("needs-review must not render an MR button")
+	}
+}
+
+func TestValidOutcome(t *testing.T) {
+	for _, o := range []string{notify.OutcomeAutoFix, notify.OutcomeAutoDiagnose, notify.OutcomeNeedsInfo, notify.OutcomeNeedsReview} {
+		if !notify.ValidOutcome(o) {
+			t.Errorf("%q should be valid", o)
+		}
+	}
+	if notify.ValidOutcome("bogus") {
+		t.Error("bogus should be invalid")
+	}
+}
+
 func TestRenderCard_RejectsUnknownOutcome(t *testing.T) {
 	if _, err := larkChan(t).Render(notify.Params{Issue: "P-1", Outcome: "bogus"}); err == nil {
 		t.Fatal("expected error for unknown outcome")

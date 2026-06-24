@@ -28,6 +28,7 @@ type fakeTrigger struct {
 	triggered []string
 	err       error
 	outcome   string // defaults to auto-fix when empty
+	noMarker  bool   // set Result.NoMarker (agent finished without a marker)
 }
 
 func (f *fakeTrigger) Command() string {
@@ -42,10 +43,21 @@ func (f *fakeTrigger) Trigger(issueKey string) (agent.Result, error) {
 		return agent.Result{ExitCode: 1, DurationMillis: 10}, f.err
 	}
 	outcome := f.outcome
-	if outcome == "" {
+	if outcome == "" && !f.noMarker {
 		outcome = agent.OutcomeAutoFix
 	}
-	return agent.Result{Outcome: outcome, MRURL: "https://gitlab.example/mr/1", HandoffPath: ".repo-knowledge/handoff/PROJ-1.needs-confirmation.md", ExitCode: 0, DurationMillis: 10}, nil
+	return agent.Result{Outcome: outcome, NoMarker: f.noMarker, MRURL: "https://gitlab.example/mr/1", HandoffPath: ".repo-knowledge/handoff/PROJ-1.needs-confirmation.md", ExitCode: 0, DurationMillis: 10}, nil
+}
+
+type fakeNotifier struct {
+	mu       sync.Mutex
+	notified []string
+}
+
+func (n *fakeNotifier) Notify(issueKey string, _ agent.Result) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.notified = append(n.notified, issueKey)
 }
 
 var emptyFilter = config.FilterConfig{}
@@ -55,7 +67,7 @@ func TestPollOnce_TriggersNewIssues(t *testing.T) {
 	trigger := &fakeTrigger{}
 	st := state.New()
 
-	if err := poller.PollOnce(jira, trigger, st, emptyFilter, 3, 0); err != nil {
+	if err := poller.PollOnce(jira, trigger, st, emptyFilter, 3, 0, nil); err != nil {
 		t.Fatal(err)
 	}
 	if len(trigger.triggered) != 2 {
@@ -78,7 +90,7 @@ func TestPollOnce_SkipsKnownIssues(t *testing.T) {
 	st := state.New()
 	st.SetIssue("PROJ-1", state.StatusTriggered)
 
-	if err := poller.PollOnce(jira, trigger, st, emptyFilter, 3, 0); err != nil {
+	if err := poller.PollOnce(jira, trigger, st, emptyFilter, 3, 0, nil); err != nil {
 		t.Fatal(err)
 	}
 	if len(trigger.triggered) != 1 || trigger.triggered[0] != "PROJ-2" {
@@ -93,7 +105,7 @@ func TestPollOnce_DoesNotRetriggerDoneIssueWhenExpiryZero(t *testing.T) {
 	st.SetIssue("PROJ-1", state.StatusDone)
 	st.Issues["PROJ-1"].TriggeredAt = time.Now().Add(-100 * 24 * time.Hour)
 
-	if err := poller.PollOnce(jira, trigger, st, emptyFilter, 3, 0); err != nil {
+	if err := poller.PollOnce(jira, trigger, st, emptyFilter, 3, 0, nil); err != nil {
 		t.Fatal(err)
 	}
 	if len(trigger.triggered) != 0 {
@@ -117,7 +129,7 @@ func TestPollOnce_RecordsOutcomeStatus(t *testing.T) {
 			trigger := &fakeTrigger{outcome: tc.outcome}
 			st := state.New()
 
-			if err := poller.PollOnce(jira, trigger, st, emptyFilter, 3, 0); err != nil {
+			if err := poller.PollOnce(jira, trigger, st, emptyFilter, 3, 0, nil); err != nil {
 				t.Fatal(err)
 			}
 			if got := st.Issues["PROJ-1"].Status; got != tc.want {
@@ -132,7 +144,7 @@ func TestPollOnce_JiraError(t *testing.T) {
 	trigger := &fakeTrigger{}
 	st := state.New()
 
-	if err := poller.PollOnce(jira, trigger, st, emptyFilter, 3, 0); err == nil {
+	if err := poller.PollOnce(jira, trigger, st, emptyFilter, 3, 0, nil); err == nil {
 		t.Fatal("expected error from jira")
 	}
 }
@@ -142,7 +154,7 @@ func TestPollOnce_RecordsTriggerFailure(t *testing.T) {
 	trigger := &fakeTrigger{err: fmt.Errorf("agent failed")}
 	st := state.New()
 
-	if err := poller.PollOnce(jira, trigger, st, emptyFilter, 3, 0); err != nil {
+	if err := poller.PollOnce(jira, trigger, st, emptyFilter, 3, 0, nil); err != nil {
 		t.Fatal(err)
 	}
 	entry := st.Issues["PROJ-1"]
@@ -166,7 +178,7 @@ func TestPollOnce_ConcurrentTrigger(t *testing.T) {
 	trigger := &fakeTrigger{}
 	st := state.New()
 
-	if err := poller.PollOnce(jira, trigger, st, emptyFilter, 3, 0); err != nil {
+	if err := poller.PollOnce(jira, trigger, st, emptyFilter, 3, 0, nil); err != nil {
 		t.Fatal(err)
 	}
 	if len(trigger.triggered) != 10 {
@@ -183,7 +195,7 @@ func TestRun_StopsOnContextCancel(t *testing.T) {
 	done := make(chan struct{})
 
 	go func() {
-		poller.Run(ctx, jira, trigger, st, emptyFilter, 50*time.Millisecond, "", 3, 0)
+		poller.Run(ctx, jira, trigger, st, emptyFilter, 50*time.Millisecond, "", 3, 0, nil)
 		close(done)
 	}()
 
@@ -265,10 +277,58 @@ func TestPollOnce_RetriggersInterrupted(t *testing.T) {
 	lister := &fakeJira{keys: []string{"BUG-1"}}
 	trig := &fakeTrigger{}
 
-	if err := poller.PollOnce(lister, trig, st, emptyFilter, 3, 0); err != nil {
+	if err := poller.PollOnce(lister, trig, st, emptyFilter, 3, 0, nil); err != nil {
 		t.Fatal(err)
 	}
 	if len(trig.triggered) != 1 {
 		t.Fatalf("expected interrupted issue to be retriggered once, got %d calls", len(trig.triggered))
+	}
+}
+
+func TestPollOnce_FallbackNotifyOnNoMarker(t *testing.T) {
+	jira := &fakeJira{keys: []string{"PROJ-1"}}
+	trigger := &fakeTrigger{noMarker: true}
+	st := state.New()
+	notifier := &fakeNotifier{}
+
+	if err := poller.PollOnce(jira, trigger, st, emptyFilter, 3, 0, notifier); err != nil {
+		t.Fatal(err)
+	}
+	if got := st.Issues["PROJ-1"].Status; got != state.StatusDone {
+		t.Fatalf("a no-marker clean run should be done, got %q", got)
+	}
+	if len(notifier.notified) != 1 || notifier.notified[0] != "PROJ-1" {
+		t.Fatalf("expected a fallback notify for PROJ-1, got %v", notifier.notified)
+	}
+}
+
+func TestPollOnce_NoNotifyWhenMarkerSeen(t *testing.T) {
+	jira := &fakeJira{keys: []string{"PROJ-1"}}
+	trigger := &fakeTrigger{outcome: agent.OutcomeAutoFix} // marker seen ⇒ NoMarker=false
+	st := state.New()
+	notifier := &fakeNotifier{}
+
+	if err := poller.PollOnce(jira, trigger, st, emptyFilter, 3, 0, notifier); err != nil {
+		t.Fatal(err)
+	}
+	if len(notifier.notified) != 0 {
+		t.Fatalf("a marker-bearing run must not trigger the fallback notify, got %v", notifier.notified)
+	}
+}
+
+func TestPollOnce_NoNotifyOnError(t *testing.T) {
+	jira := &fakeJira{keys: []string{"PROJ-1"}}
+	trigger := &fakeTrigger{err: fmt.Errorf("agent failed")}
+	st := state.New()
+	notifier := &fakeNotifier{}
+
+	if err := poller.PollOnce(jira, trigger, st, emptyFilter, 3, 0, notifier); err != nil {
+		t.Fatal(err)
+	}
+	if st.Issues["PROJ-1"].Status != state.StatusFailed {
+		t.Fatalf("a genuine error must stay failed")
+	}
+	if len(notifier.notified) != 0 {
+		t.Fatalf("a failed run must not trigger the fallback notify, got %v", notifier.notified)
 	}
 }

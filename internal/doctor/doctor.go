@@ -94,6 +94,15 @@ func parseCLIHealth(out []byte) (cliHealth, error) {
 	if err := json.Unmarshal(out, &env); err != nil {
 		return cliHealth{}, err
 	}
+	// Trust the CLI's own authoritative authValid verdict before re-deriving auth
+	// from the checks array. The connectivity check is not named uniformly across
+	// the fleet (jira-cli/gitlab-cli call it "network", kibana-cli calls it
+	// "search"), so the authPass && networkPass heuristic below would wrongly fail
+	// any CLI whose connectivity check isn't literally "network" even when it
+	// already reported authValid.
+	if env.Data.AuthValid {
+		return cliHealth{AuthValid: true, Host: env.Data.Host}, nil
+	}
 	if len(env.Data.Checks) > 0 {
 		authPass := false
 		networkPass := false
@@ -109,8 +118,8 @@ func parseCLIHealth(out []byte) (cliHealth, error) {
 		}
 		return cliHealth{AuthValid: authPass && networkPass, Host: env.Data.Host}, nil
 	}
-	if env.Data.AuthValid || env.Data.Host != "" {
-		return cliHealth{AuthValid: env.Data.AuthValid, Host: env.Data.Host}, nil
+	if env.Data.Host != "" {
+		return cliHealth{AuthValid: false, Host: env.Data.Host}, nil
 	}
 	return h, nil
 }

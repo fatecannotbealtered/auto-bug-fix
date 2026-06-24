@@ -20,18 +20,22 @@ import (
 // DefaultChannel is the channel used when notify.channel is unset.
 const DefaultChannel = "lark"
 
-// Outcome values mirror the agent's AUTO_BUG_FIX_RESULT outcomes. Only these
-// three are valid; a channel keys its header/action/buttons off them.
+// Outcome values mirror the agent's AUTO_BUG_FIX_RESULT outcomes. The first three
+// are agent-reported. needs-review is an internal fallback auto-bug-fix uses when
+// the agent finished without printing a marker: the orchestrator then sends a
+// degraded "verify manually" card itself. A channel keys its header/action/buttons
+// off these.
 const (
 	OutcomeAutoFix      = "auto-fix"
 	OutcomeAutoDiagnose = "auto-diagnose"
 	OutcomeNeedsInfo    = "needs-info"
+	OutcomeNeedsReview  = "needs-review"
 )
 
 // ValidOutcome reports whether o is a renderable outcome.
 func ValidOutcome(o string) bool {
 	switch o {
-	case OutcomeAutoFix, OutcomeAutoDiagnose, OutcomeNeedsInfo:
+	case OutcomeAutoFix, OutcomeAutoDiagnose, OutcomeNeedsInfo, OutcomeNeedsReview:
 		return true
 	default:
 		return false
@@ -69,6 +73,11 @@ type Channel interface {
 	// DoctorBin is the external CLI that doctor health-checks for this channel
 	// (e.g. "lark-cli"), or "" when the channel needs no external binary.
 	DoctorBin() string
+	// DoctorArgs are the args to run that CLI's own health check (e.g.
+	// {"doctor"}); exit 0 means usable. Channels emit different doctor output
+	// formats, so doctor relies on the exit status, not a shared JSON envelope
+	// (lark-cli, unlike the sibling jira/gitlab CLIs, has no --json authValid).
+	DoctorArgs() []string
 	// Render turns channel-neutral Params into this channel's send payload.
 	Render(p Params) (payload string, err error)
 	// Send delivers payload to recipient, using run to invoke the delivery CLI.

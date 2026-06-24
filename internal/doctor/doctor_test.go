@@ -143,6 +143,21 @@ func TestRun_JiraDoctorChecksAuthFail(t *testing.T) {
 	}
 }
 
+func TestRun_KibanaDoctorChecksAuthValidWithoutNetworkCheck(t *testing.T) {
+	// kibana-cli names its connectivity check "search", not "network", and reports
+	// an authoritative data.authValid. The auth/network heuristic must not override
+	// that verdict, or kibana is misreported as unauthenticated.
+	kibanaDoctor := `{"ok":true,"schema_version":"1.0","data":{"checks":[{"check":"auth","status":"pass"},{"check":"search","status":"pass"}],"authValid":true,"host":"https://kibana.example.com"},"meta":{"duration_ms":1}}`
+	checks := Run(cfgWith("kiro-cli chat \"fix {issueKey}\"", "kiro"), nil, lookFake(allPresent()), probeFake(map[string]string{
+		"jira-cli":   authOK,
+		"gitlab-cli": authOK,
+		"kibana-cli": kibanaDoctor,
+	}), tmplInstalled, skillsInstalled)
+	if got := levelOf(checks, "kibana-cli"); got != OK {
+		t.Errorf("kibana-cli should be OK from data.authValid despite no 'network' check, got %v (detail %q)", got, detailOf(checks, "kibana-cli"))
+	}
+}
+
 func TestRun_AllUsable(t *testing.T) {
 	checks := Run(cfgWith("kiro-cli chat \"fix {issueKey}\"", "kiro"), nil, lookFake(allPresent()), probeFake(allAuthed()), tmplInstalled, skillsInstalled)
 	if HasFailure(checks) {

@@ -107,24 +107,42 @@ func TestParseResultMarker(t *testing.T) {
 }
 
 // TestHelperProcess is re-executed as the spawned "agent" (and its grandchild)
-// to reproduce a long-lived grandchild holding the inherited stdout pipe.
+// to reproduce completion scenarios, selected via the ABF_HELPER env var.
 func TestHelperProcess(t *testing.T) {
-	if os.Getenv("ABF_HELPER") == "marker_then_hang" {
+	switch os.Getenv("ABF_HELPER") {
+	case "marker_then_hang":
 		// Print the completion marker, then block without exiting — mimicking an
 		// agent (e.g. kiro) that finished its work but stays alive (blocked on a
 		// build daemon). Trigger must detect the marker and kill us.
 		fmt.Println("AUTO_BUG_FIX_RESULT outcome=auto-fix")
 		time.Sleep(60 * time.Second)
 		os.Exit(0)
+	case "marker_then_orphan":
+		// Print the result marker, then leave a grandchild holding our stdout pipe
+		// and exit without waiting — mimicking the Gradle daemon.
+		fmt.Println("AUTO_BUG_FIX_RESULT outcome=auto-fix")
+		spawnOrphanHoldingPipe()
+		os.Exit(0)
+	case "no_marker_then_orphan":
+		// Finish the work but print NO marker, then leave a grandchild holding the
+		// stdout pipe and exit 0 — mimicking cursor/composer-2.5, which opened the
+		// MR but never printed AUTO_BUG_FIX_RESULT. The leaked pipe trips WaitDelay
+		// even though the process itself exited cleanly.
+		fmt.Println("did the work but printed no marker")
+		spawnOrphanHoldingPipe()
+		os.Exit(0)
+	case "no_marker_exit3":
+		// Genuine failure: no marker AND a non-zero exit.
+		fmt.Fprintln(os.Stderr, "boom")
+		os.Exit(3)
 	}
-	if os.Getenv("ABF_HELPER") != "marker_then_orphan" {
-		return
-	}
-	// Print the result marker, then spawn a long-lived grandchild that inherits
-	// our stdout pipe and outlives us — mimicking the Gradle daemon. Use a stock
-	// OS command (NOT the test binary) so it does not lock agent.test.exe on
-	// Windows, which would break `go test`'s post-run cleanup. Exit without waiting.
-	fmt.Println("AUTO_BUG_FIX_RESULT outcome=auto-fix")
+}
+
+// spawnOrphanHoldingPipe starts a long-lived grandchild that inherits this
+// process's stdout/stderr pipe and outlives it. A stock OS command is used (NOT
+// the test binary) so it does not lock agent.test.exe on Windows, which would
+// break `go test`'s post-run cleanup.
+func spawnOrphanHoldingPipe() {
 	var gc *exec.Cmd
 	if runtime.GOOS == "windows" {
 		gc = exec.Command("ping", "-n", "4", "127.0.0.1") //nolint:gosec
@@ -134,7 +152,6 @@ func TestHelperProcess(t *testing.T) {
 	gc.Stdout = os.Stdout
 	gc.Stderr = os.Stderr
 	_ = gc.Start()
-	os.Exit(0)
 }
 
 // TestTrigger_KillsHungAgentOnMarker guards the marker-triggered kill: when the
@@ -189,5 +206,66 @@ func TestTrigger_DoesNotHangOnOrphanPipe(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("Trigger hung: did not return after agent exited (grandchild held the pipe)")
+	}
+}
+
+// TestTrigger_NoMarkerCleanExit_NotFailure guards the WaitDelay misreport fix:
+// when the agent exits cleanly but never prints a marker (and a grandchild holds
+// the pipe so cmd.Run returns ErrWaitDelay), Trigger must report a clean,
+// no-marker completion — NOT a failure.
+func TestTrigger_NoMarkerCleanExit_NotFailure(t *testing.T) {
+	cmd := os.Args[0] + ` -test.run=^TestHelperProcess$`
+	opts := agent.Options{
+		Env:       map[string]string{"ABF_HELPER": "no_marker_then_orphan"},
+		WaitDelay: 500 * time.Millisecond,
+	}
+
+	type outcome struct {
+		r   agent.Result
+		err error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		r, err := agent.Trigger("PROJ-1", cmd, opts)
+		done <- outcome{r, err}
+	}()
+
+	select {
+	case got := <-done:
+		if got.err != nil {
+			t.Fatalf("a clean exit without a marker must not be an error, got %v", got.err)
+		}
+		if got.r.ExitCode != 0 {
+			t.Fatalf("exit code: got %d, want 0", got.r.ExitCode)
+		}
+		if !got.r.NoMarker {
+			t.Errorf("NoMarker: got false, want true")
+		}
+		if got.r.MarkerKind != agent.MarkerNone {
+			t.Errorf("MarkerKind: got %q, want none", got.r.MarkerKind)
+		}
+		if got.r.Outcome != "" {
+			t.Errorf("Outcome: got %q, want empty", got.r.Outcome)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Trigger hung on a no-marker clean exit with an orphan pipe")
+	}
+}
+
+// TestTrigger_GenuineFailure_StillErrors ensures a real non-zero exit with no
+// marker is still reported as a failure, not swallowed by the WaitDelay path.
+func TestTrigger_GenuineFailure_StillErrors(t *testing.T) {
+	cmd := os.Args[0] + ` -test.run=^TestHelperProcess$`
+	opts := agent.Options{Env: map[string]string{"ABF_HELPER": "no_marker_exit3"}}
+
+	result, err := agent.Trigger("PROJ-1", cmd, opts)
+	if err == nil {
+		t.Fatal("a genuine non-zero exit must return an error")
+	}
+	if result.NoMarker {
+		t.Error("NoMarker must be false on a genuine failure")
+	}
+	if result.ExitCode != 3 {
+		t.Errorf("exit code: got %d, want 3", result.ExitCode)
 	}
 }

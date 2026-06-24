@@ -25,12 +25,19 @@ type Triggerer interface {
 	Trigger(issueKey string) (agent.Result, error)
 }
 
+// Notifier sends a completion notification for an issue. The poller calls it only
+// when the agent finished without a marker (so it almost certainly didn't run its
+// own notify step); a nil Notifier disables the fallback.
+type Notifier interface {
+	Notify(issueKey string, result agent.Result)
+}
+
 type CommandReporter interface {
 	Command() string
 }
 
 // PollOnce runs a single poll cycle: list issues, skip known, trigger new ones concurrently.
-func PollOnce(jira JiraLister, trigger Triggerer, st *state.State, filter config.FilterConfig, maxConcurrent int, stateExpiryDays int) error {
+func PollOnce(jira JiraLister, trigger Triggerer, st *state.State, filter config.FilterConfig, maxConcurrent int, stateExpiryDays int, notifier Notifier) error {
 	keys, err := jira.ListIssues(filter)
 	if err != nil {
 		return fmt.Errorf("jira list: %w", err)
@@ -82,6 +89,11 @@ func PollOnce(jira JiraLister, trigger Triggerer, st *state.State, filter config
 				log.Printf("[auto-bug-fix] agent error for %s: %v", key, err)
 			} else {
 				st.FinishIssue(key, statusForOutcome(result.Outcome), details)
+				// No marker ⇒ the agent didn't run its own notify step; send a
+				// fallback completion card so the unattended path notifies too.
+				if result.NoMarker && notifier != nil {
+					notifier.Notify(key, result)
+				}
 			}
 		}()
 	}
@@ -104,12 +116,12 @@ func statusForOutcome(outcome string) state.Status {
 }
 
 // Run polls on the given interval until ctx is cancelled.
-func Run(ctx context.Context, jira JiraLister, trigger Triggerer, st *state.State, filter config.FilterConfig, interval time.Duration, statePath string, maxConcurrent int, stateExpiryDays int) {
+func Run(ctx context.Context, jira JiraLister, trigger Triggerer, st *state.State, filter config.FilterConfig, interval time.Duration, statePath string, maxConcurrent int, stateExpiryDays int, notifier Notifier) {
 	tick := time.NewTicker(interval)
 	defer tick.Stop()
 
 	poll := func() {
-		if err := PollOnce(jira, trigger, st, filter, maxConcurrent, stateExpiryDays); err != nil {
+		if err := PollOnce(jira, trigger, st, filter, maxConcurrent, stateExpiryDays, notifier); err != nil {
 			log.Printf("[auto-bug-fix] poll error: %v", err)
 			return
 		}
