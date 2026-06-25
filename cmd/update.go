@@ -34,10 +34,13 @@ const (
 var (
 	updateHTTPClient = &http.Client{Timeout: 2 * time.Minute}
 	updateRunCommand = runCommand
-	updateGitHubAPI  = updateAPIBaseURL
-	updatePlatform   = func() (string, string) { return runtime.GOOS, runtime.GOARCH }
-	updateExecutable = os.Executable
-	updateApply      = applyUpdateBinary
+	// updateRunPackageManager is a testable seam for the npm install step in
+	// runUpdateNPM. Tests stub it to avoid shelling out to real npm.
+	updateRunPackageManager = updateRunCommand
+	updateGitHubAPI         = updateAPIBaseURL
+	updatePlatform          = func() (string, string) { return runtime.GOOS, runtime.GOARCH }
+	updateExecutable        = os.Executable
+	updateApply             = applyUpdateBinary
 	// Stage seams, overridable in tests so the staged signed-update failure
 	// contract can be exercised without building real signed archives.
 	updateDownloadHook = downloadUpdateFile
@@ -165,7 +168,7 @@ func runUpdate(args []string) {
 func runUpdateNPM(ctx context.Context, result updateResult) {
 	// replace stage: npm install. Everything here leaves the installed package
 	// untouched until npm commits, so binary_replaced stays false on failure.
-	if err := updateRunCommand(ctx, "npm", "install", "-g", updatePackageName+"@"+result.TargetVersion); err != nil {
+	if err := updateRunPackageManager(ctx, "npm", "install", "-g", updatePackageName+"@"+result.TargetVersion); err != nil {
 		if ctx.Err() != nil {
 			interruptUpdate(stageReplace, result.CurrentVersion, false, "not_started")
 		}

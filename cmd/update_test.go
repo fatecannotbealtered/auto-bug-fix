@@ -22,11 +22,14 @@ func captureUpdate(t *testing.T, runner func(ctx context.Context, name string, a
 	t.Helper()
 	t.Setenv("AUTO_BUG_FIX_INSTALL_METHOD", "npm")
 	origRunner := updateRunCommand
+	origPM := updateRunPackageManager
 	origOut := activeOutput
 	updateRunCommand = runner
+	updateRunPackageManager = runner
 	activeOutput = outputOptions{Format: "json", Compact: true}
 	t.Cleanup(func() {
 		updateRunCommand = origRunner
+		updateRunPackageManager = origPM
 		activeOutput = origOut
 	})
 
@@ -271,7 +274,7 @@ func TestUpdateSubprocessHook(t *testing.T) {
 		args = append(args, a)
 	}
 	activeOutput = outputOptions{Format: "json", Compact: true}
-	updateRunCommand = func(_ context.Context, name string, _ ...string) error {
+	stub := func(_ context.Context, name string, _ ...string) error {
 		switch {
 		case mode == "replace_fail" && name == "npm":
 			return errors.New("ENOSPC: no space left on device")
@@ -281,5 +284,7 @@ func TestUpdateSubprocessHook(t *testing.T) {
 			return nil
 		}
 	}
+	updateRunCommand = stub
+	updateRunPackageManager = stub
 	runUpdate(args)
 }

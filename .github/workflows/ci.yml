@@ -87,6 +87,10 @@ jobs:
         if: runner.os == 'Linux'
         run: node scripts/check-version.js
 
+      - name: Verify spec/contract sync
+        if: runner.os == 'Linux'
+        run: node scripts/check-spec.js --local-only
+
       - name: Audit npm dependencies
         if: runner.os == 'Linux'
         run: npm audit --audit-level=high

@@ -3,10 +3,12 @@ package cmd
 import (
 	"fmt"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/fatecannotbealtered/auto-bug-fix/internal/config"
+	"github.com/fatecannotbealtered/auto-bug-fix/internal/contract"
 	"github.com/fatecannotbealtered/auto-bug-fix/internal/daemon"
 	"github.com/fatecannotbealtered/auto-bug-fix/internal/state"
 )
@@ -126,21 +128,9 @@ func runReference(args []string) {
 			"8":   "timeout",
 			"130": "operation cancelled by signal (SIGINT/SIGTERM)",
 		},
-		"error_codes": []map[string]any{
-			{"code": "E_USAGE", "exit_code": 2, "retryable": false},
-			{"code": "E_VALIDATION", "exit_code": 2, "retryable": false},
-			{"code": "E_NOT_FOUND", "exit_code": 3, "retryable": false},
-			{"code": "E_CONFIG", "exit_code": 4, "retryable": false},
-			{"code": "E_FORBIDDEN", "exit_code": 4, "retryable": false},
-			{"code": "E_CONFIRMATION_REQUIRED", "exit_code": 5, "retryable": false},
-			{"code": "E_CONFLICT", "exit_code": 6, "retryable": false},
-			{"code": "E_NETWORK", "exit_code": 7, "retryable": true},
-			{"code": "E_TIMEOUT", "exit_code": 8, "retryable": true},
-			{"code": "E_RUNTIME", "exit_code": 1, "retryable": false},
-			{"code": "E_INTEGRITY", "exit_code": 1, "retryable": false},
-			{"code": "E_IO", "exit_code": 1, "retryable": false},
-			{"code": "E_INTERRUPTED", "exit_code": 130, "retryable": true},
-		},
+		// error_codes is derived from the canonical contract (internal/contract)
+		// so it can never drift from the actual exit code and retryability table.
+		"error_codes": referenceErrorCodes(),
 	}
 	if !wantsText() {
 		printJSON(data)
@@ -166,6 +156,27 @@ func releaseReadiness() map[string]any {
 			"recorded_live_smoke_for_stable",
 		},
 	}
+}
+
+// referenceErrorCodes builds the error_codes table from the canonical contract
+// (internal/contract.Codes) so it can never drift from the actual exit code and
+// retryability mapping.
+func referenceErrorCodes() []map[string]any {
+	codes := make([]string, 0, len(contract.Codes))
+	for c := range contract.Codes {
+		codes = append(codes, c)
+	}
+	sort.Strings(codes)
+	out := make([]map[string]any, 0, len(codes))
+	for _, c := range codes {
+		spec := contract.Codes[c]
+		out = append(out, map[string]any{
+			"code":      c,
+			"exit_code": spec.Exit,
+			"retryable": spec.Retryable,
+		})
+	}
+	return out
 }
 
 func referenceCommands() []map[string]any {

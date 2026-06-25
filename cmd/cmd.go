@@ -17,6 +17,7 @@ import (
 
 	"github.com/fatecannotbealtered/auto-bug-fix/internal/agent"
 	"github.com/fatecannotbealtered/auto-bug-fix/internal/config"
+	"github.com/fatecannotbealtered/auto-bug-fix/internal/contract"
 	"github.com/fatecannotbealtered/auto-bug-fix/internal/daemon"
 	"github.com/fatecannotbealtered/auto-bug-fix/internal/doctor"
 	"github.com/fatecannotbealtered/auto-bug-fix/internal/guard"
@@ -29,7 +30,10 @@ import (
 // version is overridden at release time via -ldflags "-X .../cmd.version=<tag>".
 var version = "1.0.12"
 
-const schemaVersion = "1.0"
+// schemaVersion is sourced from the canonical contract (contract/contract.json
+// via internal/contract/contract_gen.go) so the JSON schema version cannot
+// drift from the fleet contract.
+const schemaVersion = contract.SchemaVersion
 
 var (
 	commandStartedAt  time.Time

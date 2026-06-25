@@ -8,7 +8,21 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/fatecannotbealtered/auto-bug-fix/internal/contract"
 )
+
+// exitCodeForCode returns the canonical process exit code for an E_* string.
+// Sourced from internal/contract so the code->exit mapping cannot drift.
+func exitCodeForCode(code string) int {
+	return contract.ExitFor(code)
+}
+
+// retryableForCode reports whether an agent may retry an E_* error code.
+// Sourced from internal/contract so the code->retryable mapping cannot drift.
+func retryableForCode(code string) bool {
+	return contract.Retryable(code)
+}
 
 const (
 	exitGeneric       = 1
@@ -234,7 +248,8 @@ func newCodedError(code string, exitCode int, retryable bool, err error) error {
 // exitCodeForError is the single place that maps an error to (exit code, code,
 // retryable). It classifies by type: an explicit codedError, or a typed
 // updateHTTPError mapped by HTTP status. Anything else is a generic runtime
-// error — we never guess intent from the message string.
+// error — we never guess intent from the message string. Exit codes and
+// retryability are sourced from internal/contract so they cannot drift.
 func exitCodeForError(err error) (int, string, bool) {
 	if err == nil {
 		return 0, "", false
@@ -247,36 +262,39 @@ func exitCodeForError(err error) (int, string, bool) {
 	if errors.As(err, &httpErr) {
 		return statusToCode(httpErr.StatusCode)
 	}
-	return exitGeneric, "E_RUNTIME", false
+	return exitCodeForCode("E_RUNTIME"), "E_RUNTIME", retryableForCode("E_RUNTIME")
 }
 
 // statusToCode maps an upstream HTTP status onto the error taxonomy (CLI-SPEC
 // §6). Centralized so every HTTP path — the npm registry check and the GitHub
 // release discover/download — classifies by status code, not by parsing a
 // human-readable error string, and the status->code->exit contract cannot drift.
+// Exit codes and retryability are sourced from internal/contract.
 func statusToCode(status int) (int, string, bool) {
+	code := ""
 	switch {
 	case status == 401:
-		return exitConfig, "E_AUTH", false
+		code = "E_AUTH"
 	case status == 403:
-		return exitConfig, "E_FORBIDDEN", false
+		code = "E_FORBIDDEN"
 	case status == 404:
-		return exitNotFound, "E_NOT_FOUND", false
+		code = "E_NOT_FOUND"
 	case status == 408:
-		return exitTimeout, "E_TIMEOUT", true
+		code = "E_TIMEOUT"
 	case status == 409:
-		return exitConflict, "E_CONFLICT", false
+		code = "E_CONFLICT"
 	case status == 429:
-		return exitNetwork, "E_RATE_LIMITED", true
+		code = "E_RATE_LIMITED"
 	case status >= 500:
-		return exitNetwork, "E_SERVER", true
+		code = "E_SERVER"
 	case status >= 400:
 		// Other client errors carry no retry signal: surface as a usage error so
 		// the agent fixes the request rather than looping.
-		return exitUsage, "E_VALIDATION", false
+		code = "E_VALIDATION"
 	default:
-		return exitGeneric, "E_RUNTIME", false
+		code = "E_RUNTIME"
 	}
+	return exitCodeForCode(code), code, retryableForCode(code)
 }
 
 func failErr(prefix string, err error) {

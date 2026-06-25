@@ -7,6 +7,17 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- **Contract single-source (`internal/contract`): `schema_version`, exit codes, and retryability are now generated from `contract/contract.json` (ai-native-cli-spec@v1.4) and cannot drift from the fleet contract.** `schemaVersion` in `cmd.go` is aliased to `contract.SchemaVersion`; `statusToCode` and `exitCodeForError` delegate to `contract.ExitFor`/`contract.Retryable`; `referenceErrorCodes` (used by `reference`) derives its table from `contract.Codes` so `reference` self-description can never drift. `E_RUNTIME` is registered as an ext code in `contract/contract-ext.json`.
+- **Conformance test (`cmd/contract_conformance_test.go`) asserts every emitted E_* code is in the canonical contract with exact exit + retryable, schema_version matches, and envelope keys are within the canonical sets.** CI-red guard against future drift.
+- **`check-spec.js` added to CI** (Verify spec/contract sync step, Linux only) to guard against the generated `internal/contract/contract_gen.go` going stale.
+
+### Changed
+
+- **`.agent` spec docs synced from ai-native-cli-spec@v1.4** (AGENT.md, CLI-SPEC.md, SEC-SPEC.md, SKILL-SPEC.md and their `_zh` variants).
+- **`update` npm path now uses `updateRunPackageManager` seam** (points to `updateRunCommand` by default) so tests can stub the npm install step without shelling out to real npm.
+
 ## [1.0.12] - 2026-06-25
 
 ### Changed
