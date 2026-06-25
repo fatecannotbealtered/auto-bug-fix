@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -125,6 +126,45 @@ func TestIsPermissionError(t *testing.T) {
 func TestDetectInstallMethodBinary(t *testing.T) {
 	if m := detectInstallMethod("/usr/local/bin/auto-bug-fix"); m != "binary" {
 		t.Fatalf("a raw binary path must detect as binary, got %q", m)
+	}
+}
+
+// TestDetectInstallMethodNPM: an executable under a node_modules tree whose
+// package.json matches this package detects as npm. The probe is real — it
+// walks up and reads package.json, not a guess from the path string alone.
+func TestDetectInstallMethodNPM(t *testing.T) {
+	root := t.TempDir()
+	pkgDir := filepath.Join(root, "node_modules", "@fateforge", "auto-bug-fix")
+	binDir := filepath.Join(pkgDir, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pkgDir, "package.json"),
+		[]byte(`{"name":"`+updatePackageName+`"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	exe := filepath.Join(binDir, "auto-bug-fix")
+	if m := detectInstallMethod(exe); m != "npm" {
+		t.Fatalf("an exe under a matching node_modules package must detect as npm, got %q", m)
+	}
+}
+
+// TestDetectInstallMethodForeignNodeModules: an exe under node_modules whose
+// nearest package.json names a DIFFERENT package is not our npm install — the
+// probe must not collapse any node_modules path into npm.
+func TestDetectInstallMethodForeignNodeModules(t *testing.T) {
+	root := t.TempDir()
+	pkgDir := filepath.Join(root, "node_modules", "some-other-tool")
+	if err := os.MkdirAll(pkgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pkgDir, "package.json"),
+		[]byte(`{"name":"some-other-tool"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	exe := filepath.Join(pkgDir, "auto-bug-fix")
+	if m := detectInstallMethod(exe); m != "binary" {
+		t.Fatalf("a foreign node_modules package must NOT detect as npm, got %q", m)
 	}
 }
 

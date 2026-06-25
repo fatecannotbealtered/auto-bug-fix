@@ -13,10 +13,12 @@ import (
 const (
 	exitGeneric       = 1
 	exitUsage         = 2
+	exitNotFound      = 3
 	exitConfig        = 4
 	exitConfirmNeeded = 5
 	exitConflict      = 6
 	exitNetwork       = 7
+	exitTimeout       = 8
 	exitInterrupted   = 130
 )
 
@@ -248,17 +250,30 @@ func exitCodeForError(err error) (int, string, bool) {
 	return exitGeneric, "E_RUNTIME", false
 }
 
-// statusToCode maps an upstream HTTP status onto the error taxonomy. Centralized
-// so the one real HTTP path (the npm registry check) classifies by status code,
-// not by parsing a human-readable error string.
+// statusToCode maps an upstream HTTP status onto the error taxonomy (CLI-SPEC
+// §6). Centralized so every HTTP path — the npm registry check and the GitHub
+// release discover/download — classifies by status code, not by parsing a
+// human-readable error string, and the status->code->exit contract cannot drift.
 func statusToCode(status int) (int, string, bool) {
 	switch {
+	case status == 401:
+		return exitConfig, "E_AUTH", false
+	case status == 403:
+		return exitConfig, "E_FORBIDDEN", false
 	case status == 404:
-		return 3, "E_NOT_FOUND", false
+		return exitNotFound, "E_NOT_FOUND", false
 	case status == 408:
-		return 8, "E_TIMEOUT", true
-	case status == 429, status >= 500:
-		return exitNetwork, "E_NETWORK", true
+		return exitTimeout, "E_TIMEOUT", true
+	case status == 409:
+		return exitConflict, "E_CONFLICT", false
+	case status == 429:
+		return exitNetwork, "E_RATE_LIMITED", true
+	case status >= 500:
+		return exitNetwork, "E_SERVER", true
+	case status >= 400:
+		// Other client errors carry no retry signal: surface as a usage error so
+		// the agent fixes the request rather than looping.
+		return exitUsage, "E_VALIDATION", false
 	default:
 		return exitGeneric, "E_RUNTIME", false
 	}

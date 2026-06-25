@@ -7,6 +7,17 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [1.0.12] - 2026-06-25
+
+### Changed
+
+- **Windows binary self-update now replaces the running executable in place atomically, the same way Unix does — no more deferred `.cmd` restart script.** `update` on a raw-binary Windows install used to copy the new binary to `<exe>.new`, spawn a detached `.cmd` that polled `move`-on-restart, and return `status:"scheduled"` (`pending_path` set) so the swap only completed after the process exited. It now uses the cross-platform rename trick (write `.<base>.new` → rename the in-use binary aside to `.<base>.old` → rename `.new` into place → restore from `.old` on failure → remove `.old`, ignoring a still-locked leftover on Windows), completing the swap immediately and returning `status:"installed"` with `binary_replaced:true`. The `scheduled` status and `pending_path` field are gone.
+
+### Fixed
+
+- **`update` no longer misclassifies transient network failures during signature/checksum verification as non-retryable integrity failures, and a SIGINT in those stages now exits cleanly.** A failed download of the Sigstore signature bundle, and a transient failure fetching the embedded TUF trust root inside in-process verification, were both collapsed into non-retryable `E_INTEGRITY` (exit 1) — telling the agent to stop and report a forged release when the real cause was a network blip it should retry. Those network steps are now classified by the taxonomy as retryable (`E_NETWORK`/`E_SERVER`/`E_TIMEOUT` → 7/8); only a true signature/identity verdict or checksum mismatch stays non-retryable `E_INTEGRITY`. The `verify_signature`/`verify_checksum` stages also now check the update context, so a Ctrl-C/SIGTERM there emits a terminal `E_INTERRUPTED` envelope (exit 130, `binary_replaced:false`, "no change") instead of being swallowed.
+- **`update` discover/download HTTP failures are now classified by status code instead of being flattened into `E_NETWORK`.** A non-2xx response from the GitHub releases API (or an asset CDN) was surfaced as an untyped error that the discover/download fallback turned into retryable `E_NETWORK` — so a `404` (release/asset not found) or `403` looked like a transient blip to loop on. Those responses now carry their HTTP status through the single `statusToCode` mapping (CLI-SPEC §6): `404 → E_NOT_FOUND` (3), `401 → E_AUTH` / `403 → E_FORBIDDEN` (4), `409 → E_CONFLICT` (6), `429 → E_RATE_LIMITED` / `5xx → E_SERVER` (7), `408 → E_TIMEOUT` (8); only genuine transport errors (DNS/dial) remain `E_NETWORK`.
+
 ## [1.0.11] - 2026-06-24
 
 ### Fixed

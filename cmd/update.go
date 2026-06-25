@@ -35,7 +35,6 @@ var (
 	updateHTTPClient = &http.Client{Timeout: 2 * time.Minute}
 	updateRunCommand = runCommand
 	updateGitHubAPI  = updateAPIBaseURL
-	updateNow        = time.Now
 	updatePlatform   = func() (string, string) { return runtime.GOOS, runtime.GOARCH }
 	updateExecutable = os.Executable
 	updateApply      = applyUpdateBinary
@@ -44,6 +43,13 @@ var (
 	updateDownloadHook = downloadUpdateFile
 	updateChecksumHook = verifyUpdateChecksum
 	updateExtractHook  = extractUpdateArchive
+	// updateSignalContext builds the SIGINT/SIGTERM-cancelled context for the
+	// update run. It is a seam so the interrupt contract (terminal envelope + exit
+	// 130) can be exercised deterministically, since self-delivered SIGINT is not
+	// portable (notably unsupported on Windows).
+	updateSignalContext = func() (context.Context, context.CancelFunc) {
+		return signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	}
 )
 
 type updateResult struct {
@@ -68,7 +74,6 @@ type updateResult struct {
 	BinaryReplaced     bool             `json:"binary_replaced"`
 	ReleaseURL         string           `json:"release_url,omitempty"`
 	Path               string           `json:"path,omitempty"`
-	PendingPath        string           `json:"pending_path,omitempty"`
 }
 
 // updateStage names a single step of the staged self-update so every failure
@@ -141,7 +146,7 @@ func runUpdate(args []string) {
 	// Trap SIGINT/SIGTERM: on interrupt we still emit a terminal JSON envelope
 	// describing the post-state per the stage invariant, then exit 130 — never a
 	// bare killed process. The context cancels the in-flight command/download.
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	ctx, stop := updateSignalContext()
 	defer stop()
 
 	// Route by install method: an npm-managed install (exe under node_modules)
@@ -244,17 +249,27 @@ func runUpdateBinary(ctx context.Context, result updateResult) {
 	}
 
 	// verify_signature -> verify_checksum: the Sigstore signature on checksums.txt
-	// is verified FIRST, then the archive checksum. Both fail closed and
-	// non-retryable (E_INTEGRITY): a forged or corrupt release is not a transient
-	// blip an agent should loop on.
+	// is verified FIRST, then the archive checksum. A true signature/identity or
+	// checksum mismatch fails closed and non-retryable (E_INTEGRITY) — a forged or
+	// corrupt release is not a blip to loop on. But the network steps inside
+	// verification (signature-bundle download, TUF trust-root fetch) are retryable
+	// network/timeout failures, NOT integrity verdicts, and a SIGINT here must exit
+	// 130 with a terminal envelope — so we check ctx first and classify by code.
+	if ctx.Err() != nil {
+		interruptUpdate(stageVerifySignature, result.CurrentVersion, false, "not_run")
+	}
 	signatureStatus, err := verifyUpdateChecksumSignature(ctx, checksumPath, plan.SignatureBundleURL, tmpDir)
 	if err != nil {
-		fail(exitGeneric, "E_INTEGRITY", "update verify_signature failed: "+err.Error(),
-			updateFailureDetails(stageVerifySignature, result.CurrentVersion, false, "not_run"), false)
+		if ctx.Err() != nil {
+			interruptUpdate(stageVerifySignature, result.CurrentVersion, false, "not_run")
+		}
+		failVerify(stageVerifySignature, result.CurrentVersion, err)
+	}
+	if ctx.Err() != nil {
+		interruptUpdate(stageVerifyChecksum, result.CurrentVersion, false, "not_run")
 	}
 	if err := updateChecksumHook(archivePath, checksumPath, plan.AssetName); err != nil {
-		fail(exitGeneric, "E_INTEGRITY", "update verify_checksum failed: "+err.Error(),
-			updateFailureDetails(stageVerifyChecksum, result.CurrentVersion, false, "not_run"), false)
+		failVerify(stageVerifyChecksum, result.CurrentVersion, err)
 	}
 
 	// replace: local extract + atomic swap. Failures here are filesystem/permission
@@ -277,7 +292,6 @@ func runUpdateBinary(ctx context.Context, result updateResult) {
 	result.SignatureVerified = signatureStatus == "verified"
 	result.ChecksumVerified = true
 	result.Path = applied.Path
-	result.PendingPath = applied.PendingPath
 
 	// skill_sync runs AFTER the swap. A failure here is PARTIAL SUCCESS: the
 	// binary is on the new version, only the Skill is stale.
@@ -327,6 +341,29 @@ func failUpdate(stage, current string, binaryReplaced bool, skillSyncStatus stri
 		code, exitCode, retryable = "E_NETWORK", exitNetwork, true
 	}
 	fail(exitCode, code, "update "+stage+" failed: "+err.Error(), updateFailureDetails(stage, current, binaryReplaced, skillSyncStatus), retryable)
+}
+
+// failVerify classifies a verify_signature/verify_checksum failure. A network
+// step inside verification (signature-bundle download, TUF trust-root fetch)
+// carries a typed retryable code and is surfaced as such — re-running `update` is
+// the right move. Any other failure is a true integrity verdict (bad signature,
+// identity mismatch, checksum mismatch): non-retryable E_INTEGRITY, do NOT retry.
+func failVerify(stage, current string, err error) {
+	exitCode, code, retryable := classifyVerifyError(err)
+	fail(exitCode, code, "update "+stage+" failed: "+err.Error(),
+		updateFailureDetails(stage, current, false, "not_run"), retryable)
+}
+
+// classifyVerifyError maps a verify-stage error onto the taxonomy: a typed
+// retryable network/timeout failure (signature-bundle download, TUF trust-root
+// fetch) keeps its classification; anything untyped or already E_INTEGRITY is a
+// true integrity verdict — non-retryable E_INTEGRITY (exit 1).
+func classifyVerifyError(err error) (int, string, bool) {
+	exitCode, code, retryable := exitCodeForError(err)
+	if code == "E_RUNTIME" || code == "E_INTEGRITY" {
+		return exitGeneric, "E_INTEGRITY", false
+	}
+	return exitCode, code, retryable
 }
 
 // failReplace classifies a local npm-install failure. A permission failure is
@@ -494,9 +531,18 @@ func fetchLatestNPMVersion(ctx context.Context) (string, error) {
 
 type updateHTTPError struct {
 	StatusCode int
+	Body       string
+	URL        string
 }
 
 func (e *updateHTTPError) Error() string {
+	if e.URL != "" {
+		msg := fmt.Sprintf("GET %s returned HTTP %d", e.URL, e.StatusCode)
+		if e.Body != "" {
+			msg += ": " + e.Body
+		}
+		return msg
+	}
 	return fmt.Sprintf("registry returned HTTP %d", e.StatusCode)
 }
 
@@ -590,8 +636,7 @@ func updateNotices(result updateResult) []map[string]any {
 // delta between the running version and the latest, computed at check time and
 // stored in the cache (CLI-SPEC §14). It returns "warning" when the delta
 // contains a security entry OR the latest crosses a major version (likely
-// security-relevant or breaking), and "info" otherwise. "critical" is reserved
-// and never derived from the changelog delta.
+// security-relevant or breaking), and "info" otherwise.
 func updateNoticeSeverity(current, latest string) string {
 	if versionParts(latest)[0] > versionParts(current)[0] {
 		return "warning"
@@ -712,9 +757,8 @@ type updatePlan struct {
 }
 
 type updateApplyResult struct {
-	Status      string
-	Path        string
-	PendingPath string
+	Status string
+	Path   string
 }
 
 func fetchUpdateRelease(ctx context.Context, targetVersion string) (*updateRelease, error) {
@@ -827,11 +871,11 @@ func updateHTTPGet(ctx context.Context, url string) ([]byte, error) {
 	if readErr != nil {
 		return nil, fmt.Errorf("reading response: %w", readErr)
 	}
-	if resp.StatusCode == http.StatusNotFound {
-		return nil, &updateHTTPError{StatusCode: resp.StatusCode}
-	}
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("GET %s returned %d: %s", url, resp.StatusCode, truncateForError(string(data), 200))
+		// Classify by HTTP status via the taxonomy (CLI-SPEC §6): a 404 is
+		// E_NOT_FOUND, 429/5xx are retryable, etc. Carry the body for the message
+		// but never let an agent classify by sniffing it.
+		return nil, &updateHTTPError{StatusCode: resp.StatusCode, Body: truncateForError(string(data), 200), URL: url}
 	}
 	return data, nil
 }
@@ -848,7 +892,7 @@ func downloadUpdateFile(ctx context.Context, url, dest string) error {
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 400 {
 		data, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("GET %s returned %d: %s", url, resp.StatusCode, truncateForError(string(data), 200))
+		return &updateHTTPError{StatusCode: resp.StatusCode, Body: truncateForError(string(data), 200), URL: url}
 	}
 	tmp := dest + ".part"
 	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
@@ -926,16 +970,43 @@ func verifyUpdateChecksum(archivePath, checksumPath, assetName string) error {
 // returned status is always "verified" on the nil-error path.
 func verifyUpdateChecksumSignature(ctx context.Context, checksumPath, bundleURL, tmpDir string) (string, error) {
 	if strings.TrimSpace(bundleURL) == "" {
-		return "missing", errors.New("release does not include checksums.txt.sigstore.json; refusing to install an unsigned release")
+		// A genuinely unsigned release fails closed as an integrity failure: there
+		// is no skip path. Typed E_INTEGRITY so the caller never retries it.
+		return "missing", newCodedError("E_INTEGRITY", exitGeneric, false,
+			errors.New("release does not include checksums.txt.sigstore.json; refusing to install an unsigned release"))
 	}
 	bundlePath := filepath.Join(tmpDir, "checksums.txt.sigstore.json")
 	if err := updateDownloadHook(ctx, bundleURL, bundlePath); err != nil {
-		return "download_failed", fmt.Errorf("downloading checksum signature bundle: %w", err)
+		// Fetching the signature bundle is a network step, not a signature verdict:
+		// a transient download failure is retryable, NOT E_INTEGRITY. Reclassify the
+		// raw download error (typed HTTP status or transport) via the taxonomy.
+		return "download_failed", classifyNetworkFailure(fmt.Errorf("downloading checksum signature bundle: %w", err))
 	}
 	if err := updateVerifySignature(checksumPath, bundlePath, updateSignerIdentityRegexp()); err != nil {
-		return "failed", err
+		// The verifier already tags a TUF-trust-root network fetch as retryable
+		// network; any other verdict is a true signature/identity failure.
+		var ce *codedError
+		if errors.As(err, &ce) {
+			return "failed", err
+		}
+		return "failed", newCodedError("E_INTEGRITY", exitGeneric, false, err)
 	}
 	return "verified", nil
+}
+
+// classifyNetworkFailure ensures a download error carries a retryable network
+// taxonomy code. A typed HTTP status (or an already-coded error) is passed
+// through so statusToCode decides; a bare transport error becomes E_NETWORK.
+func classifyNetworkFailure(err error) error {
+	var ce *codedError
+	if errors.As(err, &ce) {
+		return err
+	}
+	var httpErr *updateHTTPError
+	if errors.As(err, &httpErr) {
+		return err
+	}
+	return newCodedError("E_NETWORK", exitNetwork, true, err)
 }
 
 func extractUpdateArchive(archivePath, assetName, tmpDir string) (string, error) {
@@ -1026,56 +1097,48 @@ func writeExtractedUpdateBinary(tmpDir, name string, r io.Reader) (string, error
 	return outPath, nil
 }
 
+// applyUpdateBinary atomically replaces the running executable in place using the
+// rename trick — identical on Windows and Unix, no GOOS branch. It writes the new
+// binary to .<base>.new, renames the in-use target out of the way to .<base>.old
+// (Windows permits renaming a running .exe), moves .new into place, and removes
+// .old on success (a left-behind .old on Windows, if still locked, is ignored). On
+// any rename failure the original is restored from .old.
 func applyUpdateBinary(src, dst string) (updateApplyResult, error) {
-	if runtime.GOOS == "windows" {
-		return scheduleWindowsBinaryReplace(src, dst)
+	target := dst
+	if resolved, err := filepath.EvalSymlinks(dst); err == nil {
+		target = resolved
 	}
 	mode := os.FileMode(0o755)
-	if st, err := os.Stat(dst); err == nil {
+	if st, err := os.Stat(target); err == nil {
 		mode = st.Mode().Perm()
 		if mode&0o111 == 0 {
 			mode |= 0o755
 		}
 	}
-	tmpName := fmt.Sprintf(".%s.update-%d", filepath.Base(dst), updateNow().UnixNano())
-	tmpPath := filepath.Join(filepath.Dir(dst), tmpName)
-	if err := copyFile(src, tmpPath, mode); err != nil {
-		return updateApplyResult{}, err
-	}
-	if err := os.Rename(tmpPath, dst); err != nil {
-		_ = os.Remove(tmpPath)
-		return updateApplyResult{}, err
-	}
-	return updateApplyResult{Status: "installed", Path: dst}, nil
-}
+	dir := filepath.Dir(target)
+	base := filepath.Base(target)
+	newPath := filepath.Join(dir, "."+base+".new")
+	backupPath := filepath.Join(dir, "."+base+".old")
 
-func scheduleWindowsBinaryReplace(src, dst string) (updateApplyResult, error) {
-	pending := dst + ".new"
-	if err := copyFile(src, pending, 0o755); err != nil {
+	_ = os.Remove(newPath)
+	if err := copyFile(src, newPath, mode); err != nil {
+		_ = os.Remove(newPath)
 		return updateApplyResult{}, err
 	}
-	scriptPath := filepath.Join(os.TempDir(), fmt.Sprintf("auto-bug-fix-update-%d.cmd", updateNow().UnixNano()))
-	script := strings.Join([]string{
-		"@echo off",
-		"setlocal",
-		"set \"PENDING=" + batchEscape(pending) + "\"",
-		"set \"TARGET=" + batchEscape(dst) + "\"",
-		"for /L %%I in (1,1,30) do (",
-		"  move /Y \"%PENDING%\" \"%TARGET%\" > nul 2>&1",
-		"  if not exist \"%PENDING%\" goto done",
-		"  ping 127.0.0.1 -n 2 > nul",
-		")",
-		":done",
-		"del \"%~f0\" > nul 2>&1",
-		"",
-	}, "\r\n")
-	if err := os.WriteFile(scriptPath, []byte(script), 0o600); err != nil {
-		return updateApplyResult{}, err
+
+	_ = os.Remove(backupPath)
+	if err := os.Rename(target, backupPath); err != nil {
+		_ = os.Remove(newPath)
+		return updateApplyResult{}, fmt.Errorf("preparing to replace %s: %w", target, err)
 	}
-	if err := exec.Command("cmd", "/C", "start", "", "/B", scriptPath).Start(); err != nil {
-		return updateApplyResult{}, err
+	if err := os.Rename(newPath, target); err != nil {
+		_ = os.Rename(backupPath, target)
+		return updateApplyResult{}, fmt.Errorf("replacing %s: %w; original restored", target, err)
 	}
-	return updateApplyResult{Status: "scheduled", Path: dst, PendingPath: pending}, nil
+	// Best-effort: on Windows the moved-aside old binary may still be locked by the
+	// running process and can't be deleted yet — that's harmless, so ignore.
+	_ = os.Remove(backupPath)
+	return updateApplyResult{Status: "installed", Path: target}, nil
 }
 
 func copyFile(src, dst string, mode os.FileMode) error {
@@ -1104,8 +1167,4 @@ func truncateForError(s string, n int) string {
 		return s
 	}
 	return s[:n] + "..."
-}
-
-func batchEscape(s string) string {
-	return strings.ReplaceAll(s, "%", "%%")
 }

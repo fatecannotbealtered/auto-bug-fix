@@ -27,7 +27,7 @@ import (
 )
 
 // version is overridden at release time via -ldflags "-X .../cmd.version=<tag>".
-var version = "1.0.11"
+var version = "1.0.12"
 
 const schemaVersion = "1.0"
 

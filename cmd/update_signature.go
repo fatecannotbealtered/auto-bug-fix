@@ -42,9 +42,14 @@ func verifySigstoreBundle(artifactPath, bundlePath, sanRegex string) error {
 		return fmt.Errorf("loading signature bundle: %w", err)
 	}
 
+	// Fetching/refreshing the TUF trust root is a NETWORK step, not a signature
+	// verdict: a transient failure here is retryable and must not be reported as an
+	// integrity failure. Type it so the caller classifies it as network, not
+	// E_INTEGRITY.
 	trustedRoot, err := root.FetchTrustedRoot()
 	if err != nil {
-		return fmt.Errorf("loading sigstore trust root: %w", err)
+		return newCodedError("E_NETWORK", exitNetwork, true,
+			fmt.Errorf("loading sigstore trust root: %w", err))
 	}
 
 	sev, err := verify.NewVerifier(trustedRoot,

@@ -172,6 +172,56 @@ func TestRunUpdateBinaryMissingBundle(t *testing.T) {
 	}
 }
 
+// TestRunUpdateBinarySignatureBundleNetwork: a failed download of the signature
+// bundle inside verify_signature is a RETRYABLE network failure, NOT a forged
+// release. It must surface as retryable (E_SERVER for 503), exit 7, with the
+// binary untouched — never the non-retryable E_INTEGRITY an agent must not loop
+// on. This is the core of fix #1.
+func TestRunUpdateBinarySignatureBundleNetwork(t *testing.T) {
+	env, exit := runBinaryUpdateSubprocess(t, "sig_bundle_network")
+	if env.OK {
+		t.Fatalf("bundle network failure must fail: %+v", env)
+	}
+	if env.Error == nil {
+		t.Fatal("missing error envelope")
+	}
+	if env.Error.Code == "E_INTEGRITY" || !env.Error.Retryable {
+		t.Fatalf("bundle download failure must be retryable network, not E_INTEGRITY: %+v", env.Error)
+	}
+	if exit != exitNetwork {
+		t.Fatalf("retryable network exit want %d got %d", exitNetwork, exit)
+	}
+	if env.Error.Details["stage"] != "verify_signature" {
+		t.Fatalf("stage should be verify_signature: %#v", env.Error.Details)
+	}
+	if br, _ := env.Error.Details["binary_replaced"].(bool); br {
+		t.Fatalf("verify-stage failure must leave binary_replaced:false: %#v", env.Error.Details)
+	}
+}
+
+// TestRunUpdateBinaryVerifyInterrupt: a SIGINT during the verify stage emits a
+// terminal E_INTERRUPTED envelope (exit 130) reporting no change, not a bare
+// killed process and not E_INTEGRITY.
+func TestRunUpdateBinaryVerifyInterrupt(t *testing.T) {
+	env, exit := runBinaryUpdateSubprocess(t, "verify_interrupt")
+	if env.OK {
+		t.Fatalf("interrupt must fail: %+v", env)
+	}
+	if env.Error == nil || env.Error.Code != "E_INTERRUPTED" {
+		t.Fatalf("verify-stage interrupt must be E_INTERRUPTED: %+v", env.Error)
+	}
+	if exit != exitInterrupted {
+		t.Fatalf("E_INTERRUPTED exit want %d got %d", exitInterrupted, exit)
+	}
+	stage, _ := env.Error.Details["stage"].(string)
+	if stage != "verify_signature" && stage != "verify_checksum" {
+		t.Fatalf("interrupt stage should be a verify stage: %#v", env.Error.Details)
+	}
+	if br, _ := env.Error.Details["binary_replaced"].(bool); br {
+		t.Fatalf("pre-swap interrupt must report binary_replaced:false: %#v", env.Error.Details)
+	}
+}
+
 // runBinaryUpdateSubprocess re-executes this test binary in the signed-binary
 // hook entrypoint so paths that exit via fail() can be observed.
 func runBinaryUpdateSubprocess(t *testing.T, mode string) (jsonEnvelope, int) {
@@ -237,6 +287,36 @@ func TestBinaryUpdateSubprocessHook(t *testing.T) {
 	case "checksum_fail":
 		updateVerifySignature = func(_, _, _ string) error { return nil }
 		updateChecksumHook = func(_, _, _ string) error { return errors.New("checksum mismatch for archive") }
+	case "sig_bundle_network":
+		// The signature-bundle download fails with a 503: a retryable NETWORK
+		// failure inside the verify stage, NOT an integrity verdict. The archive +
+		// checksums downloads (called first) must still succeed, so only fail the
+		// bundle URL.
+		updateDownloadHook = func(_ context.Context, url, dest string) error {
+			if strings.HasSuffix(url, "checksums.txt.sigstore.json") {
+				return &updateHTTPError{StatusCode: 503, URL: url}
+			}
+			return os.WriteFile(dest, []byte("stub"), 0o600)
+		}
+	case "verify_interrupt":
+		// Simulate a SIGINT landing during the verify stage. The signal context is
+		// stubbed so that when the bundle download (the first network step of
+		// verify_signature) starts, it cancels the update context — exactly as a
+		// real SIGINT would. The verify stage must then observe ctx.Err() and emit a
+		// terminal E_INTERRUPTED envelope (exit 130), never E_INTEGRITY. (A
+		// self-delivered SIGINT is not portable — unsupported on Windows — so the
+		// signal seam is what makes this deterministic.)
+		ctx, cancel := context.WithCancel(context.Background())
+		updateSignalContext = func() (context.Context, context.CancelFunc) { return ctx, cancel }
+		updateDownloadHook = func(_ context.Context, url, dest string) error {
+			if err := os.WriteFile(dest, []byte("stub"), 0o600); err != nil {
+				return err
+			}
+			if strings.HasSuffix(url, "checksums.txt.sigstore.json") {
+				cancel()
+			}
+			return nil
+		}
 	}
 	runUpdate([]string{"--target-version", "9.9.9"})
 }
