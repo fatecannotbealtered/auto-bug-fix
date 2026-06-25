@@ -271,7 +271,7 @@ func referenceSchemas() map[string]any {
 		"context_result":   schema("object", []string{"version", "paths", "config", "poller", "credentials", "agent", "notices", "_untrusted"}, nil),
 		"reference_result": schema("object", []string{"tool", "version", "risk_tier", "machine_contract", "release_readiness", "commands", "schemas", "exit_codes", "error_codes"}, nil),
 		"changelog_result": schema("object", []string{"current_version", "since", "entries"}, nil),
-		"update_result":    schema("object", []string{"status", "message", "current_version", "latest_version", "target_version", "update_available", "install_method", "recommended_command", "skill_sync_command", "skill_sync_status", "signature_status", "signature_verified", "checksum_verified", "preview", "stage", "binary_replaced", "previous_version", "next_steps", "notices"}, nil),
+		"update_result":    schema("object", []string{"status", "message", "current_version", "latest_version", "target_version", "update_available", "install_method", "command", "skill_sync_command", "skill_sync_status", "signature_status", "signature_verified", "checksum_verified", "preview", "stage", "binary_replaced", "previous_version", "next_steps", "notices"}, nil),
 		"version_result":   schema("object", []string{"version"}, nil),
 	}
 }

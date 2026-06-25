@@ -215,6 +215,12 @@ func copyField(dst, src map[string]any, path []string) {
 }
 
 func fail(exitCode int, code, message string, details map[string]any, retryable bool) {
+	// Derive the exit code from the canonical contract so a caller cannot pass a
+	// mismatched constant. exitCodeForCode returns the contract value for any known
+	// E_* code; for unknown codes the passed-in exitCode is the last resort.
+	if derived := exitCodeForCode(code); derived != 0 {
+		exitCode = derived
+	}
 	if wantsText() {
 		fmt.Fprintln(os.Stderr, message)
 		os.Exit(exitCode)

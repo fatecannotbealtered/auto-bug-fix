@@ -103,14 +103,67 @@ func checkEnvelopeKeys(t *testing.T, env jsonEnvelope, canonical []string, label
 			t.Errorf("%s envelope missing required key %q", label, req)
 		}
 	}
+	// 3b: success envelope must contain "data" (success_keys require it).
+	if label == "success" {
+		if _, ok := top["data"]; !ok {
+			t.Errorf("success envelope missing required key \"data\"")
+		}
+	}
 	var meta map[string]json.RawMessage
 	if raw, ok := top["meta"]; ok {
 		_ = json.Unmarshal(raw, &meta)
+	}
+	// 3a: assert each MetaRequiredKey is PRESENT (not just no extras).
+	for _, req := range contract.MetaRequiredKeys {
+		if _, ok := meta[req]; !ok {
+			t.Errorf("meta missing required key %q (contract.MetaRequiredKeys=%v)", req, contract.MetaRequiredKeys)
+		}
 	}
 	allowed := append(append([]string{}, contract.MetaRequiredKeys...), contract.MetaOptionalKeys...)
 	for k := range meta {
 		if !containsStr(allowed, k) {
 			t.Errorf("meta has unexpected key %q (canonical: %v)", k, allowed)
+		}
+	}
+}
+
+// TestContractConformance_HardcodedTable asserts ExitCodeForErrorCode and
+// RetryableForErrorCode match an INDEPENDENT hardcoded expected map of the 16
+// core codes. This catches a wrong contract.json that the contract-delegating
+// assertion above cannot detect (it would just pass the wrong values through).
+// Canonical table: E_USAGE/E_VALIDATION=2; E_NOT_FOUND=3;
+// E_AUTH/E_FORBIDDEN/E_CONFIG=4; E_CONFIRMATION_REQUIRED=5; E_CONFLICT=6;
+// E_NETWORK/E_RATE_LIMITED/E_SERVER=7 (retryable); E_TIMEOUT=8 (retryable);
+// E_INTEGRITY/E_IO/E_UNKNOWN=1; E_INTERRUPTED=130 (retryable); non-retryable otherwise.
+func TestContractConformance_HardcodedTable(t *testing.T) {
+	type want struct {
+		exit      int
+		retryable bool
+	}
+	table := map[string]want{
+		"E_USAGE":                 {exit: 2, retryable: false},
+		"E_VALIDATION":            {exit: 2, retryable: false},
+		"E_NOT_FOUND":             {exit: 3, retryable: false},
+		"E_AUTH":                  {exit: 4, retryable: false},
+		"E_FORBIDDEN":             {exit: 4, retryable: false},
+		"E_CONFIG":                {exit: 4, retryable: false},
+		"E_CONFIRMATION_REQUIRED": {exit: 5, retryable: false},
+		"E_CONFLICT":              {exit: 6, retryable: false},
+		"E_NETWORK":               {exit: 7, retryable: true},
+		"E_RATE_LIMITED":          {exit: 7, retryable: true},
+		"E_SERVER":                {exit: 7, retryable: true},
+		"E_TIMEOUT":               {exit: 8, retryable: true},
+		"E_INTEGRITY":             {exit: 1, retryable: false},
+		"E_IO":                    {exit: 1, retryable: false},
+		"E_UNKNOWN":               {exit: 1, retryable: false},
+		"E_INTERRUPTED":           {exit: 130, retryable: true},
+	}
+	for code, exp := range table {
+		if got := exitCodeForCode(code); got != exp.exit {
+			t.Errorf("exit drift for %q: got %d want %d", code, got, exp.exit)
+		}
+		if got := retryableForCode(code); got != exp.retryable {
+			t.Errorf("retryable drift for %q: got %v want %v", code, got, exp.retryable)
 		}
 	}
 }

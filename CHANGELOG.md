@@ -9,6 +9,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [1.0.13] - 2026-06-25
 
+### Fixed
+
+- **`update` result field `recommended_command` renamed to `command`** to match the canonical update-result contract (`command` is the spec-mandated key for the package-manager update command).
+- **`update` binary-path discover failure now exits 3 (`E_NOT_FOUND`) instead of 1.** A `fail(exitGeneric, "E_NOT_FOUND", …)` call at the discover stage emitted the wrong exit code; the `fail` helper now derives the process exit from the contract-canonical exit for the error code, eliminating this class of drift.
+- **Contract conformance test strengthened:** asserts each `MetaRequiredKey` (e.g. `duration_ms`) is present in emitted meta; asserts success envelope contains `"data"`; adds an independent hardcoded expected table of core-16 codes → {exit, retryable} to catch a wrong `contract.json` that the contract-delegating assertions cannot detect.
+
 ### Added
 
 - **Contract single-source (`internal/contract`): `schema_version`, exit codes, and retryability are now generated from `contract/contract.json` (ai-native-cli-spec@v1.4) and cannot drift from the fleet contract.** `schemaVersion` in `cmd.go` is aliased to `contract.SchemaVersion`; `statusToCode` and `exitCodeForError` delegate to `contract.ExitFor`/`contract.Retryable`; `referenceErrorCodes` (used by `reference`) derives its table from `contract.Codes` so `reference` self-description can never drift. `E_RUNTIME` is registered as an ext code in `contract/contract-ext.json`.

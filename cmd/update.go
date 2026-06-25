@@ -56,27 +56,27 @@ var (
 )
 
 type updateResult struct {
-	Status             string           `json:"status"`
-	CurrentVersion     string           `json:"current_version"`
-	LatestVersion      string           `json:"latest_version"`
-	TargetVersion      string           `json:"target_version"`
-	UpdateAvailable    bool             `json:"update_available"`
-	InstallMethod      string           `json:"install_method"`
-	RecommendedCommand string           `json:"recommended_command"`
-	SkillSyncCommand   string           `json:"skill_sync_command"`
-	SkillSyncStatus    string           `json:"skill_sync_status,omitempty"`
-	Message            string           `json:"message,omitempty"`
-	SignatureStatus    string           `json:"signature_status"`
-	SignatureVerified  bool             `json:"signature_verified"`
-	ChecksumVerified   bool             `json:"checksum_verified"`
-	PreviousVersion    string           `json:"previous_version,omitempty"`
-	NextSteps          []string         `json:"next_steps,omitempty"`
-	Notices            []map[string]any `json:"notices,omitempty"`
-	Preview            map[string]any   `json:"preview,omitempty"`
-	Stage              string           `json:"stage,omitempty"`
-	BinaryReplaced     bool             `json:"binary_replaced"`
-	ReleaseURL         string           `json:"release_url,omitempty"`
-	Path               string           `json:"path,omitempty"`
+	Status            string           `json:"status"`
+	CurrentVersion    string           `json:"current_version"`
+	LatestVersion     string           `json:"latest_version"`
+	TargetVersion     string           `json:"target_version"`
+	UpdateAvailable   bool             `json:"update_available"`
+	InstallMethod     string           `json:"install_method"`
+	Command           string           `json:"command"`
+	SkillSyncCommand  string           `json:"skill_sync_command"`
+	SkillSyncStatus   string           `json:"skill_sync_status,omitempty"`
+	Message           string           `json:"message,omitempty"`
+	SignatureStatus   string           `json:"signature_status"`
+	SignatureVerified bool             `json:"signature_verified"`
+	ChecksumVerified  bool             `json:"checksum_verified"`
+	PreviousVersion   string           `json:"previous_version,omitempty"`
+	NextSteps         []string         `json:"next_steps,omitempty"`
+	Notices           []map[string]any `json:"notices,omitempty"`
+	Preview           map[string]any   `json:"preview,omitempty"`
+	Stage             string           `json:"stage,omitempty"`
+	BinaryReplaced    bool             `json:"binary_replaced"`
+	ReleaseURL        string           `json:"release_url,omitempty"`
+	Path              string           `json:"path,omitempty"`
 }
 
 // updateStage names a single step of the staged self-update so every failure
@@ -223,7 +223,7 @@ func runUpdateBinary(ctx context.Context, result updateResult) {
 	}
 	plan, err := buildUpdatePlan(rel, result.TargetVersion)
 	if err != nil {
-		fail(exitGeneric, "E_NOT_FOUND", "update discover failed: "+err.Error(),
+		fail(exitNotFound, "E_NOT_FOUND", "update discover failed: "+err.Error(),
 			updateFailureDetails(stageDiscover, result.CurrentVersion, false, "not_run"), false)
 	}
 	result.ReleaseURL = plan.ReleaseURL
@@ -319,7 +319,7 @@ func updateDryRunPreview(result updateResult) map[string]any {
 	if result.InstallMethod == "npm" {
 		return map[string]any{
 			"changes": []map[string]any{
-				{"action": "package manager update", "command": result.RecommendedCommand},
+				{"action": "package manager update", "command": result.Command},
 				{"action": "skill sync", "command": result.SkillSyncCommand},
 			},
 		}
@@ -471,18 +471,18 @@ func buildUpdateResult(targetVersion string) (updateResult, error) {
 		signatureStatus = "not_checked"
 	}
 	result := updateResult{
-		Status:             status,
-		Message:            message,
-		CurrentVersion:     current,
-		LatestVersion:      latest,
-		TargetVersion:      latest,
-		UpdateAvailable:    compareVersions(latest, current) > 0 || (targetVersion != "" && compareVersions(latest, current) != 0),
-		InstallMethod:      method,
-		RecommendedCommand: "npm install -g " + updatePackageName + "@" + latest,
-		SkillSyncCommand:   updateSkillSyncCommand(),
-		SignatureStatus:    signatureStatus,
-		SignatureVerified:  false,
-		ChecksumVerified:   false,
+		Status:            status,
+		Message:           message,
+		CurrentVersion:    current,
+		LatestVersion:     latest,
+		TargetVersion:     latest,
+		UpdateAvailable:   compareVersions(latest, current) > 0 || (targetVersion != "" && compareVersions(latest, current) != 0),
+		InstallMethod:     method,
+		Command:           "npm install -g " + updatePackageName + "@" + latest,
+		SkillSyncCommand:  updateSkillSyncCommand(),
+		SignatureStatus:   signatureStatus,
+		SignatureVerified: false,
+		ChecksumVerified:  false,
 	}
 	return result, nil
 }
@@ -718,8 +718,8 @@ func printUpdate(result updateResult) {
 		return
 	}
 	fmt.Printf("auto-bug-fix update: %s -> %s (%s)\n", result.CurrentVersion, result.TargetVersion, result.Status)
-	if result.RecommendedCommand != "" {
-		fmt.Println(result.RecommendedCommand)
+	if result.Command != "" {
+		fmt.Println(result.Command)
 	}
 }
 
