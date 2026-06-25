@@ -7,6 +7,8 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [1.0.13] - 2026-06-25
+
 ### Added
 
 - **Contract single-source (`internal/contract`): `schema_version`, exit codes, and retryability are now generated from `contract/contract.json` (ai-native-cli-spec@v1.4) and cannot drift from the fleet contract.** `schemaVersion` in `cmd.go` is aliased to `contract.SchemaVersion`; `statusToCode` and `exitCodeForError` delegate to `contract.ExitFor`/`contract.Retryable`; `referenceErrorCodes` (used by `reference`) derives its table from `contract.Codes` so `reference` self-description can never drift. `E_RUNTIME` is registered as an ext code in `contract/contract-ext.json`.

@@ -28,7 +28,7 @@ import (
 )
 
 // version is overridden at release time via -ldflags "-X .../cmd.version=<tag>".
-var version = "1.0.12"
+var version = "1.0.13"
 
 // schemaVersion is sourced from the canonical contract (contract/contract.json
 // via internal/contract/contract_gen.go) so the JSON schema version cannot
