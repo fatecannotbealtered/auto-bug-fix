@@ -7,6 +7,10 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed
+
+- **`npm ci` lockfile drift fixed.** The per-platform `optionalDependencies` subentries in `package-lock.json` (`node_modules/@fateforge/auto-bug-fix-*`) were missing their `version`, so once those platform packages were published, `npm ci` failed its consistency check (`lock file's <pkg>@ does not satisfy <pkg>@<version>`). The version bump (`scripts/version-files.js`) now syncs the lockfile platform subentries too (stripping any stale `resolved`/`integrity`), and `check-version.js` guards them, so the drift can't silently recur.
+
 ## [1.0.14] - 2026-06-29
 
 ### Fixed
