@@ -34,13 +34,13 @@ func TestVerifyUpdateChecksumSignature_FailClosed(t *testing.T) {
 	defer func() { updateHTTPClient = origClient; updateVerifySignature = origVerify }()
 	updateHTTPClient = srv.Client()
 
-	updateVerifySignature = func(_, _, _ string) error { return nil }
+	updateVerifySignature = func(_ context.Context, _, _, _ string) error { return nil }
 	status, err := verifyUpdateChecksumSignature(context.Background(), tmp+"/c.txt", srv.URL+"/b.json", tmp)
 	if err != nil || status != "verified" {
 		t.Fatalf("expected verified, got status=%q err=%v", status, err)
 	}
 
-	updateVerifySignature = func(_, _, _ string) error { return errors.New("certificate identity mismatch") }
+	updateVerifySignature = func(_ context.Context, _, _, _ string) error { return errors.New("certificate identity mismatch") }
 	if _, err := verifyUpdateChecksumSignature(context.Background(), tmp+"/c.txt", srv.URL+"/b.json", tmp); err == nil {
 		t.Fatal("signature verification failure must abort")
 	}
@@ -283,9 +283,9 @@ func TestBinaryUpdateSubprocessHook(t *testing.T) {
 
 	switch mode {
 	case "signature_fail":
-		updateVerifySignature = func(_, _, _ string) error { return errors.New("certificate identity mismatch") }
+		updateVerifySignature = func(_ context.Context, _, _, _ string) error { return errors.New("certificate identity mismatch") }
 	case "checksum_fail":
-		updateVerifySignature = func(_, _, _ string) error { return nil }
+		updateVerifySignature = func(_ context.Context, _, _, _ string) error { return nil }
 		updateChecksumHook = func(_, _, _ string) error { return errors.New("checksum mismatch for archive") }
 	case "sig_bundle_network":
 		// The signature-bundle download fails with a 503: a retryable NETWORK
@@ -332,7 +332,7 @@ func withBinaryUpdateSeams(t *testing.T, apiURL string, order *[]string) func() 
 		platform func() (string, string)
 		exe      func() (string, error)
 		download func(context.Context, string, string) error
-		verify   func(string, string, string) error
+		verify   func(context.Context, string, string, string) error
 		checksum func(string, string, string) error
 		extract  func(string, string, string) (string, error)
 		apply    func(string, string) (updateApplyResult, error)
@@ -345,7 +345,7 @@ func withBinaryUpdateSeams(t *testing.T, apiURL string, order *[]string) func() 
 	updateDownloadHook = func(ctx context.Context, _, dest string) error {
 		return os.WriteFile(dest, []byte("stub"), 0o600)
 	}
-	updateVerifySignature = func(_, _, _ string) error { *order = append(*order, "verify_signature"); return nil }
+	updateVerifySignature = func(_ context.Context, _, _, _ string) error { *order = append(*order, "verify_signature"); return nil }
 	updateChecksumHook = func(_, _, _ string) error { *order = append(*order, "verify_checksum"); return nil }
 	updateExtractHook = func(_, _, tmpDir string) (string, error) {
 		p := tmpDir + "/auto-bug-fix"

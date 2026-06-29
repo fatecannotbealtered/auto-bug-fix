@@ -158,7 +158,7 @@ func TestVerifySignatureVerdictIsIntegrity(t *testing.T) {
 	updateDownloadHook = func(_ context.Context, _, dest string) error {
 		return os.WriteFile(dest, []byte("stub"), 0o600)
 	}
-	updateVerifySignature = func(_, _, _ string) error { return errors.New("certificate identity mismatch") }
+	updateVerifySignature = func(_ context.Context, _, _, _ string) error { return errors.New("certificate identity mismatch") }
 
 	_, err := verifyUpdateChecksumSignature(context.Background(), tmp+"/c.txt", srv.URL+"/b.json", tmp)
 	exit, code, retryable := exitCodeForError(err)
@@ -185,7 +185,7 @@ func TestVerifySignatureTUFFetchIsRetryableNetwork(t *testing.T) {
 	updateDownloadHook = func(_ context.Context, _, dest string) error {
 		return os.WriteFile(dest, []byte("stub"), 0o600)
 	}
-	updateVerifySignature = func(_, _, _ string) error {
+	updateVerifySignature = func(_ context.Context, _, _, _ string) error {
 		return newCodedError("E_NETWORK", exitNetwork, true, errors.New("loading sigstore trust root: timeout"))
 	}
 

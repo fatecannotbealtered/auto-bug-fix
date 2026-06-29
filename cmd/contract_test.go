@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"os/exec"
 	"path/filepath"
@@ -53,7 +54,7 @@ func TestReferenceCommandsHaveSchemasAndExamples(t *testing.T) {
 }
 
 func TestUpdateSameVersionIsNotAvailable(t *testing.T) {
-	result, err := buildUpdateResult(version)
+	result, err := buildUpdateResult(context.Background(), version)
 	if err != nil {
 		t.Fatal(err)
 	}

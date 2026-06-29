@@ -7,6 +7,14 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [1.0.14] - 2026-06-29
+
+### Fixed
+
+- `update` Sigstore signature verification now bounds the TUF trust-root refresh with a timeout and binds it to the command context. A hung or slow Sigstore TUF registry can no longer stall the `verify_signature` stage indefinitely, and a SIGINT during the refresh is honored (the trust-root refresh failure is still classified as retryable network, not `E_INTEGRITY`) (CLI-SPEC §14).
+- `update` now installs the SIGINT/SIGTERM signal context **before** the discover-stage version probe (npm registry / GitHub release lookup), so an interrupt during discovery emits a terminal envelope and exits 130 instead of leaving a bare killed process.
+- `update` notice reads are now version-aware: a cached `update_available` notice is suppressed once the running binary is already at or past the cached latest version. Because this cache has no TTL, the notice previously kept nagging until the next active `--check`; it now clears as soon as the running version catches up.
+
 ## [1.0.13] - 2026-06-25
 
 ### Fixed

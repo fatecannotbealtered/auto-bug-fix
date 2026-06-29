@@ -114,9 +114,19 @@ func runUpdate(args []string) {
 		}
 	}
 
+	// Trap SIGINT/SIGTERM up front so even the discover-stage network probe (the
+	// npm-registry / GitHub release lookup) is cancellable and still emits a
+	// terminal envelope on interrupt, rather than a bare killed process. The
+	// signal context now covers discovery, not only download/verify/replace.
+	ctx, stop := updateSignalContext()
+	defer stop()
+
 	// discover stage: resolve the latest (or requested) version.
-	result, err := buildUpdateResult(targetVersion)
+	result, err := buildUpdateResult(ctx, targetVersion)
 	if err != nil {
+		if ctx.Err() != nil {
+			interruptUpdate(stageDiscover, normalizeVersion(version), false, "not_run")
+		}
 		failUpdate(stageDiscover, normalizeVersion(version), false, "not_applicable", err)
 	}
 
@@ -145,12 +155,6 @@ func runUpdate(args []string) {
 		printUpdate(result)
 		return
 	}
-
-	// Trap SIGINT/SIGTERM: on interrupt we still emit a terminal JSON envelope
-	// describing the post-state per the stage invariant, then exit 130 — never a
-	// bare killed process. The context cancels the in-flight command/download.
-	ctx, stop := updateSignalContext()
-	defer stop()
 
 	// Route by install method: an npm-managed install (exe under node_modules)
 	// updates via the package manager; a raw binary self-updates from the signed
@@ -443,13 +447,13 @@ func isPermissionError(err error) bool {
 	return false
 }
 
-func buildUpdateResult(targetVersion string) (updateResult, error) {
+func buildUpdateResult(ctx context.Context, targetVersion string) (updateResult, error) {
 	latest := targetVersion
 	status := ""
 	message := ""
 	method := installMethod()
 	if latest == "" {
-		v, err := fetchLatestVersion(context.Background(), method)
+		v, err := fetchLatestVersion(ctx, method)
 		if err != nil {
 			var httpErr *updateHTTPError
 			if errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusNotFound {
@@ -707,6 +711,13 @@ func readUpdateNotices() []map[string]any {
 		return nil
 	}
 	if !cache.UpdateAvailable {
+		return nil
+	}
+	// Version-aware: suppress a stale "update available" notice once the running
+	// binary is already at (or past) the cached latest version — e.g. right after
+	// a successful update. This cache carries no TTL, so without this guard the
+	// notice would nag until the next active --check rewrites it.
+	if cache.LatestVersion != "" && compareVersions(cache.LatestVersion, normalizeVersion(version)) <= 0 {
 		return nil
 	}
 	return cache.Notices
@@ -985,7 +996,7 @@ func verifyUpdateChecksumSignature(ctx context.Context, checksumPath, bundleURL,
 		// raw download error (typed HTTP status or transport) via the taxonomy.
 		return "download_failed", classifyNetworkFailure(fmt.Errorf("downloading checksum signature bundle: %w", err))
 	}
-	if err := updateVerifySignature(checksumPath, bundlePath, updateSignerIdentityRegexp()); err != nil {
+	if err := updateVerifySignature(ctx, checksumPath, bundlePath, updateSignerIdentityRegexp()); err != nil {
 		// The verifier already tags a TUF-trust-root network fetch as retryable
 		// network; any other verdict is a true signature/identity failure.
 		var ce *codedError

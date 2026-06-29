@@ -30,7 +30,7 @@ func writeTestCache(t *testing.T, updateAvailable bool, notices []map[string]any
 	t.Helper()
 	cache := updateCache{
 		CurrentVersion:  "1.0.0",
-		LatestVersion:   "1.0.1",
+		LatestVersion:   "999.0.0",
 		UpdateAvailable: updateAvailable,
 		CheckedAt:       "2026-06-21T00:00:00Z",
 		Notices:         notices,
@@ -88,7 +88,7 @@ func (f failRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 // and the path makes no network call.
 func TestMetaNoticesPresentWhenCacheHasUpdate(t *testing.T) {
 	setTempHome(t)
-	notice := map[string]any{"type": "update_available", "severity": "info", "latest_version": "1.0.1"}
+	notice := map[string]any{"type": "update_available", "severity": "info", "latest_version": "999.0.0"}
 	writeTestCache(t, true, []map[string]any{notice})
 
 	origClient := updateHTTPClient
