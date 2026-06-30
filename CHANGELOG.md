@@ -7,6 +7,10 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- **Agents now inspect Jira ticket attachments.** Step 1 of every agent template (claude-code / codex / cursor / kiro) now lists ticket attachments via `jira-cli issue attachments <ISSUE_KEY>` and downloads/inspects the bug-relevant ones (error screenshots, logs/HAR, repro recordings) before judging root cause — previously only the description and comments were read, silently omitting the highest-value evidence. The Confidence Gate now treats unreviewed attachments that may carry runtime evidence as an evidence gap (prefer `auto-diagnose`/`needs-info` over `auto-fix`). Attachment filenames are treated as `_untrusted`. Docs-only; the agent already runs `jira-cli` in-shell (#3).
+
 ### Fixed
 
 - **`npm ci` lockfile drift fixed.** The per-platform `optionalDependencies` subentries in `package-lock.json` (`node_modules/@fateforge/auto-bug-fix-*`) were missing their `version`, so once those platform packages were published, `npm ci` failed its consistency check (`lock file's <pkg>@ does not satisfy <pkg>@<version>`). The version bump (`scripts/version-files.js`) now syncs the lockfile platform subentries too (stripping any stale `resolved`/`integrity`), and `check-version.js` guards them, so the drift can't silently recur.
