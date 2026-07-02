@@ -7,6 +7,8 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [1.0.15] - 2026-07-02
+
 ### Added
 
 - **Agents now inspect Jira ticket attachments.** Step 1 of every agent template (claude-code / codex / cursor / kiro) now lists ticket attachments via `jira-cli issue attachments <ISSUE_KEY>` and downloads/inspects the bug-relevant ones (error screenshots, logs/HAR, repro recordings) before judging root cause — previously only the description and comments were read, silently omitting the highest-value evidence. The Confidence Gate now treats unreviewed attachments that may carry runtime evidence as an evidence gap (prefer `auto-diagnose`/`needs-info` over `auto-fix`). Attachment filenames are treated as `_untrusted`. Docs-only; the agent already runs `jira-cli` in-shell (#3).
