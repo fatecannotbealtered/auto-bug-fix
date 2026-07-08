@@ -7,6 +7,21 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [1.0.16] - 2026-07-08
+
+### Added
+
+- **Bidirectional Feishu interaction (opt-in `interact` config).** A long-lived inbound listener runs alongside the poller inside the `start --detach` daemon and consumes Lark card callbacks via `lark-cli event consume card.action.trigger`, so a human can act from an interactive card instead of only receiving the one-way completion card. Three loops:
+  - **needs-info clarification** — the needs-info card gains an input box; a submitted answer re-triggers the fix with the answer injected as `AUTO_BUG_FIX_EXTRA_CONTEXT` and accumulated across rounds in `state.json` (multi-round, restart-safe).
+  - **MR approval gate** (`interact.approval`, requires `verify.enabled`) — after the AI verifier upholds a fix, it is held (`awaiting-approval`) and an approve/reject card is sent; only an authorized approve opens the MR, re-checking git integrity first, while a reject downgrades to `auto-diagnose` with no MR ever opened. Held via persist-and-resume (never a blocking wait), so a pending approval can't stall the poll loop and survives a daemon restart.
+  - **poller control card** — pause / resume / rerun / status from card buttons and a rerun input.
+  Authorization is enforced solely on the callback's server-delivered `operator_id` against `interact.authorizedOpenIds`; card-carried values are treated as `_untrusted`. Disabled by default; the interactive cards are Card 2.0 while the existing one-way completion card stays Card 1.0. No secrets (lark-cli owns Lark auth). `doctor` adds an advisory `interact` check (missing `lark-cli` → Warn; otherwise an Info reminder that the Feishu console callback configuration has no preflight).
+
+### Fixed
+
+- `update` success now reports final post-install state (`current_version == target_version`, `update_available: false`) and rewrites the local update cache so later commands do not surface stale update notices.
+- Post-swap Skill-sync partial-success details now also report `target_version` and `update_available: false`, so agents can tell the binary is already at the target version even though the Skill still needs syncing.
+
 ## [1.0.15] - 2026-07-02
 
 ### Added

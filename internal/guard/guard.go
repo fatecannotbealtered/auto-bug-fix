@@ -48,6 +48,10 @@ type Config struct {
 	// WorkspaceRoot is the configured clone root; a proposal's workspace must live
 	// under it (an agent cannot point the verifier at an unrelated clean directory).
 	WorkspaceRoot string
+	// RequireApproval adds a human approve/reject gate AFTER the AI verifier upholds:
+	// RunGuarded stops before Phase B and returns a result with AwaitingApproval set;
+	// the caller persists the proposal and later calls Execute on an approve.
+	RequireApproval bool
 }
 
 // SpawnFunc spawns the agent for issueKey in the given phase and returns the parsed
@@ -98,12 +102,33 @@ func RunGuarded(issueKey string, cfg Config, spawn SpawnFunc) (agent.Result, err
 		return downgrade(res, verdictReason(verdict)), nil
 	}
 
+	// AI upheld. If a human approval gate is on, hold here — do NOT run Phase B.
+	// The caller persists the proposal (res carries workspace/branch/base/head) and
+	// resumes via Execute on an authorized approve. No MR exists yet, so a later
+	// reject has nothing to revoke.
+	if cfg.RequireApproval {
+		res.AwaitingApproval = true
+		return res, nil
+	}
+
 	// Phase B — execute the already-decided fix (push + MR + Jira).
+	return Execute(issueKey, cfg, res, spawn)
+}
+
+// Execute runs Phase B (push + MR + Jira) for an already-verified proposal. It is
+// the resume point for the human-approval gate: the caller reconstructs proposal
+// from the persisted PendingApproval and calls this on an approve. It re-checks
+// integrity first, because the local commit has been sitting on disk and could have
+// been moved/reset since it was verified.
+func Execute(issueKey string, cfg Config, proposal agent.Result, spawn SpawnFunc) (agent.Result, error) {
+	if reason := checkIntegrity(cfg, proposal); reason != "" {
+		return downgrade(proposal, "integrity re-check failed before execute: "+reason), nil
+	}
 	return spawn(issueKey, PhaseExecute, map[string]string{
-		EnvExpectedHead: res.Head,
-		EnvWorkspace:    res.Workspace,
-		EnvFixBranch:    res.Branch,
-		EnvBaseBranch:   res.Base,
+		EnvExpectedHead: proposal.Head,
+		EnvWorkspace:    proposal.Workspace,
+		EnvFixBranch:    proposal.Branch,
+		EnvBaseBranch:   proposal.Base,
 	})
 }
 

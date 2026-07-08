@@ -31,6 +31,47 @@ func TestNotifyDryRunRendersPreview(t *testing.T) {
 	}
 }
 
+// With interaction enabled, a needs-info notify renders the interactive Card 2.0
+// clarification card (input box + callback) instead of the one-way card.
+func TestNotifyNeedsInfoRendersInteractiveCardWhenEnabled(t *testing.T) {
+	t.Setenv("AUTO_BUG_FIX_INTERACT_ENABLED", "true")
+	stdout, err := runCLIForTest(t, "notify",
+		"--issue", "PROJ-7", "--outcome", "needs-info",
+		"--summary", "登录报错", "--solution", "期望的行为是什么？", "--jira-url", "http://jira/PROJ-7",
+		"--dry-run", "--compact")
+	if err != nil {
+		t.Fatalf("notify needs-info --dry-run failed: %v\n%s", err, stdout)
+	}
+	env := parseEnvelope(t, stdout)
+	if !env.OK {
+		t.Fatalf("notify --dry-run should succeed: %+v", env)
+	}
+	data := dataMap(t, env)
+	preview, ok := data["preview"].(map[string]any)
+	if !ok {
+		t.Fatalf("preview should be a card object: %#v", data["preview"])
+	}
+	if preview["schema"] != "2.0" {
+		t.Fatalf("interactive needs-info card must be Card 2.0, got schema %v", preview["schema"])
+	}
+}
+
+// With interaction disabled, needs-info stays the one-way Card 1.0 (no schema key).
+func TestNotifyNeedsInfoStaysOneWayWhenInteractDisabled(t *testing.T) {
+	t.Setenv("AUTO_BUG_FIX_INTERACT_ENABLED", "")
+	stdout, err := runCLIForTest(t, "notify",
+		"--issue", "PROJ-7", "--outcome", "needs-info", "--solution", "q",
+		"--dry-run", "--compact")
+	if err != nil {
+		t.Fatalf("notify needs-info --dry-run failed: %v\n%s", err, stdout)
+	}
+	data := dataMap(t, parseEnvelope(t, stdout))
+	preview, _ := data["preview"].(map[string]any)
+	if _, isCard2 := preview["schema"]; isCard2 {
+		t.Fatal("with interaction disabled, needs-info must stay the one-way Card 1.0")
+	}
+}
+
 func TestNotifyInvalidOutcomeIsValidationError(t *testing.T) {
 	stdout, err := runCLIForTest(t, "notify", "--issue", "PROJ-1", "--outcome", "bogus", "--dry-run", "--compact")
 	if err == nil {

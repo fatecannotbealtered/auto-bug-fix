@@ -76,6 +76,11 @@ type Result struct {
 	// Verifier VERIFY fields.
 	Verdict      string
 	VerifyReason string
+	// AwaitingApproval is set by the guard (not parsed from a marker) when a fix
+	// passed the AI verifier but a human MR-approval is required: Phase B was NOT
+	// run, the proposal is held for approve/reject. The Workspace/Branch/Base/Head
+	// fields above carry what a later Execute needs to resume.
+	AwaitingApproval bool
 }
 
 type Options struct {

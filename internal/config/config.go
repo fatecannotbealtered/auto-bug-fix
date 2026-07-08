@@ -18,6 +18,7 @@ type Config struct {
 	Knowledge KnowledgeConfig `json:"knowledge"`
 	Verify    VerifyConfig    `json:"verify"`
 	Notify    NotifyConfig    `json:"notify"`
+	Interact  InteractConfig  `json:"interact"`
 }
 
 // VerifyConfig configures the two-phase evidence gate. When Enabled, an auto-fix is
@@ -79,6 +80,29 @@ type NotifyConfig struct {
 	Target  string `json:"target"`
 }
 
+// InteractConfig controls the optional bidirectional Feishu interaction subsystem.
+// When Enabled, the poller daemon runs a long-lived inbound listener that consumes
+// Lark card callbacks (via lark-cli) so a human can answer an agent's needs-info
+// questions from an interactive card, and the answer re-triggers the fix. Disabled
+// by default (opt-in). No secrets here: lark-cli owns Lark auth.
+//
+// AuthorizedOpenIDs is the allowlist of Lark open_ids permitted to act on cards.
+// Authorization is checked ONLY against the callback's server-delivered operator_id,
+// never against card-carried values (which are untrusted); so at least one open_id
+// is required when Enabled. TimeoutHours bounds how long an unanswered interaction
+// stays pending before it is given up (0 = a built-in default).
+type InteractConfig struct {
+	Enabled           bool     `json:"enabled"`
+	AuthorizedOpenIDs []string `json:"authorizedOpenIds"`
+	// Approval adds a human MR-approval gate AFTER the AI verifier upholds a fix:
+	// the proposal is held (StatusAwaitingApproval) and an approve/reject card is
+	// sent; only an authorized approve opens the MR. Requires verify.enabled (it
+	// gates the verified two-phase execute) and interact.enabled (the listener
+	// receives the callback).
+	Approval     bool `json:"approval"`
+	TimeoutHours int  `json:"timeoutHours"`
+}
+
 // FilterConfig defines which Bugs to process. All fields are optional.
 // The poller translates these into jira-cli flags — no JQL knowledge required.
 type FilterConfig struct {
@@ -99,6 +123,7 @@ const DefaultPollMaxConcurrent = 3
 const DefaultWorkspaceCleanup = "keep"
 const DefaultKnowledgeDir = ".repo-knowledge"
 const DefaultKnowledgeHandoffDir = "handoff"
+const DefaultInteractTimeoutHours = 24
 
 func DefaultWorkspaceRoot() string {
 	home, err := os.UserHomeDir()
@@ -184,6 +209,9 @@ func substituteEnvInConfig(cfg *Config) []string {
 	cfg.Knowledge.HandoffDir = substituteEnv(cfg.Knowledge.HandoffDir, missing)
 	cfg.Verify.Command = substituteEnv(cfg.Verify.Command, missing)
 	cfg.Notify.Target = substituteEnv(cfg.Notify.Target, missing)
+	for i := range cfg.Interact.AuthorizedOpenIDs {
+		cfg.Interact.AuthorizedOpenIDs[i] = substituteEnv(cfg.Interact.AuthorizedOpenIDs[i], missing)
+	}
 
 	if len(missing) == 0 {
 		return nil
@@ -229,6 +257,12 @@ func ApplyDefaults(cfg *Config) {
 	}
 	if !cfg.Knowledge.handoffSet {
 		cfg.Knowledge.Handoff = true
+	}
+	if cfg.Interact.TimeoutHours == 0 {
+		cfg.Interact.TimeoutHours = DefaultInteractTimeoutHours
+	}
+	if cfg.Interact.AuthorizedOpenIDs == nil {
+		cfg.Interact.AuthorizedOpenIDs = []string{}
 	}
 }
 
@@ -309,6 +343,24 @@ func Validate(cfg Config) error {
 	// always has somewhere to deliver to.
 	if cfg.Notify.Enabled && strings.TrimSpace(cfg.Notify.Target) == "" {
 		return fmt.Errorf("notify.target is required when notify.enabled is true (fallback recipient); set notify.target or set notify.enabled=false")
+	}
+	// The interaction listener authorizes actions solely on the callback's
+	// operator_id, so an empty allowlist would let no one act (and, worse, invites
+	// trusting card-carried values). Require at least one authorized open_id.
+	if cfg.Interact.Enabled && len(cfg.Interact.AuthorizedOpenIDs) == 0 {
+		return fmt.Errorf("interact.authorizedOpenIds must list at least one open_id when interact.enabled is true (only these users may act on cards)")
+	}
+	if cfg.Interact.TimeoutHours < 0 {
+		return fmt.Errorf("interact.timeoutHours must be >= 0")
+	}
+	if cfg.Interact.Approval && !cfg.Interact.Enabled {
+		return fmt.Errorf("interact.approval requires interact.enabled=true (the listener receives the approve/reject callback)")
+	}
+	if cfg.Interact.Approval && !cfg.Verify.Enabled {
+		return fmt.Errorf("interact.approval requires verify.enabled=true (approval gates the verified two-phase execute)")
+	}
+	if cfg.Interact.Approval && !cfg.Notify.Enabled {
+		return fmt.Errorf("interact.approval requires notify.enabled=true (the approve/reject card is delivered via the notification channel; without it the fix would hang at awaiting-approval)")
 	}
 	return nil
 }

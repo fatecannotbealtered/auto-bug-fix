@@ -20,6 +20,9 @@ import (
 // Paths that call fail() (os.Exit) are covered by the subprocess tests below.
 func captureUpdate(t *testing.T, runner func(ctx context.Context, name string, args ...string) error, fn func()) jsonEnvelope {
 	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	t.Setenv("AUTO_BUG_FIX_INSTALL_METHOD", "npm")
 	origRunner := updateRunCommand
 	origPM := updateRunPackageManager
@@ -76,6 +79,12 @@ func TestUpdateExecutesWithoutConfirmToken(t *testing.T) {
 	if data["current_version"] != "9.9.9" {
 		t.Fatalf("current_version should advance to target: %#v", data)
 	}
+	if data["update_available"] != false {
+		t.Fatalf("update_available should be false after successful update: %#v", data)
+	}
+	if notices := readUpdateNotices(); len(notices) != 0 {
+		t.Fatalf("successful update should not leave update_available notices: %#v", notices)
+	}
 	if len(calls) != 2 || !strings.HasPrefix(calls[0], "npm install") || !strings.HasPrefix(calls[1], "npx skills") {
 		t.Fatalf("expected npm install then npx skills add, got %v", calls)
 	}
@@ -90,6 +99,14 @@ func TestUpdateIdempotentNoOp(t *testing.T) {
 		return nil
 	}
 	env := captureUpdate(t, runner, func() {
+		writeTestCache(t, true, []map[string]any{{
+			"type":             "update_available",
+			"severity":         "warning",
+			"message":          "auto-bug-fix 9.9.9 is available",
+			"current_version":  "1.0.0",
+			"latest_version":   "9.9.9",
+			"update_available": true,
+		}})
 		runUpdate([]string{"--target-version", normalizeVersion(version)})
 	})
 	if !env.OK {
@@ -101,6 +118,12 @@ func TestUpdateIdempotentNoOp(t *testing.T) {
 	data, _ := env.Data.(map[string]any)
 	if status, _ := data["status"].(string); status != "up_to_date" {
 		t.Fatalf("idempotent status should be up_to_date: %#v", data)
+	}
+	if _, ok := env.Meta["notices"]; ok {
+		t.Fatalf("idempotent update must not emit stale meta.notices: %#v", env.Meta)
+	}
+	if notices := readUpdateNotices(); len(notices) != 0 {
+		t.Fatalf("idempotent update should clear stale notices: %#v", notices)
 	}
 }
 
@@ -206,6 +229,12 @@ func TestUpdateSkillSyncPartialSuccess(t *testing.T) {
 	if d["stage"] != "skill_sync" {
 		t.Fatalf("stage should be skill_sync: %#v", d)
 	}
+	if d["target_version"] != "9.9.9" {
+		t.Fatalf("target_version should remain the requested version: %#v", d)
+	}
+	if d["update_available"] != false {
+		t.Fatalf("update_available should be false after replacement: %#v", d)
+	}
 	if _, ok := d["skill_sync_command"]; !ok {
 		t.Fatalf("partial success must carry skill_sync_command: %#v", d)
 	}
@@ -234,11 +263,14 @@ func TestUpdateReplaceFailureIsE_IO(t *testing.T) {
 // method is pinned so the routed path is the package-manager path.
 func runUpdateSubprocess(t *testing.T, mode string, args ...string) (jsonEnvelope, int) {
 	t.Helper()
+	home := t.TempDir()
 	cmd := exec.Command(os.Args[0], "-test.run", "TestUpdateSubprocessHook") //nolint:gosec
 	cmd.Env = append(os.Environ(),
 		"AUTO_BUG_FIX_TEST_UPDATE_HOOK="+mode,
 		"AUTO_BUG_FIX_TEST_UPDATE_ARGS="+strings.Join(args, " "),
 		"AUTO_BUG_FIX_INSTALL_METHOD=npm",
+		"HOME="+home,
+		"USERPROFILE="+home,
 	)
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout

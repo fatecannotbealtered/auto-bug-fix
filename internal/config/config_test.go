@@ -187,6 +187,117 @@ func TestLoad_NotifyTargetSubstitutesEnv(t *testing.T) {
 	}
 }
 
+func TestLoad_InteractDefaultsDisabled(t *testing.T) {
+	path := writeConfig(t, map[string]any{})
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Interact.Enabled {
+		t.Fatal("interact.enabled should default to false (opt-in)")
+	}
+	if cfg.Interact.TimeoutHours != config.DefaultInteractTimeoutHours {
+		t.Fatalf("interact.timeoutHours default: got %d, want %d", cfg.Interact.TimeoutHours, config.DefaultInteractTimeoutHours)
+	}
+	if cfg.Interact.AuthorizedOpenIDs == nil {
+		t.Fatal("interact.authorizedOpenIds should default to an empty slice")
+	}
+}
+
+func TestLoad_InteractParsed(t *testing.T) {
+	path := writeConfig(t, map[string]any{
+		"interact": map[string]any{
+			"enabled":           true,
+			"authorizedOpenIds": []string{"ou_alice", "ou_bob"},
+			"timeoutHours":      6,
+		},
+	})
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Interact.Enabled {
+		t.Fatal("interact.enabled=true should be parsed")
+	}
+	if len(cfg.Interact.AuthorizedOpenIDs) != 2 || cfg.Interact.AuthorizedOpenIDs[0] != "ou_alice" {
+		t.Fatalf("interact.authorizedOpenIds: got %v", cfg.Interact.AuthorizedOpenIDs)
+	}
+	if cfg.Interact.TimeoutHours != 6 {
+		t.Fatalf("interact.timeoutHours: got %d, want 6", cfg.Interact.TimeoutHours)
+	}
+}
+
+func TestLoad_InteractOpenIDsSubstituteEnv(t *testing.T) {
+	t.Setenv("TEST_LARK_OPENID", "ou_fromenv")
+	path := writeConfig(t, map[string]any{
+		"interact": map[string]any{
+			"enabled":           true,
+			"authorizedOpenIds": []string{"$TEST_LARK_OPENID"},
+		},
+	})
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Interact.AuthorizedOpenIDs) != 1 || cfg.Interact.AuthorizedOpenIDs[0] != "ou_fromenv" {
+		t.Fatalf("interact.authorizedOpenIds env substitution: got %v", cfg.Interact.AuthorizedOpenIDs)
+	}
+}
+
+func TestValidate_InteractEnabledRequiresAuthorizedOpenIDs(t *testing.T) {
+	cfg := validConfig()
+	cfg.Interact.Enabled = true
+	cfg.Interact.AuthorizedOpenIDs = nil
+	if err := config.Validate(cfg); err == nil {
+		t.Fatal("interact.enabled with no authorized open_ids must fail validation")
+	}
+	cfg.Interact.AuthorizedOpenIDs = []string{"ou_alice"}
+	if err := config.Validate(cfg); err != nil {
+		t.Fatalf("interact.enabled with an authorized open_id should pass, got %v", err)
+	}
+}
+
+func TestValidate_InteractNegativeTimeoutFails(t *testing.T) {
+	cfg := validConfig()
+	cfg.Interact.Enabled = true
+	cfg.Interact.AuthorizedOpenIDs = []string{"ou_alice"}
+	cfg.Interact.TimeoutHours = -1
+	if err := config.Validate(cfg); err == nil {
+		t.Fatal("negative interact.timeoutHours must fail validation")
+	}
+}
+
+func TestValidate_InteractApprovalRequiresEnabledAndVerify(t *testing.T) {
+	// approval without interact.enabled fails
+	cfg := validConfig()
+	cfg.Interact.Approval = true
+	cfg.Interact.Enabled = false
+	if err := config.Validate(cfg); err == nil {
+		t.Fatal("interact.approval without interact.enabled must fail")
+	}
+	// approval + enabled but without verify.enabled fails
+	cfg = validConfig()
+	cfg.Interact.Enabled = true
+	cfg.Interact.AuthorizedOpenIDs = []string{"ou_alice"}
+	cfg.Interact.Approval = true
+	cfg.Verify.Enabled = false
+	if err := config.Validate(cfg); err == nil {
+		t.Fatal("interact.approval without verify.enabled must fail")
+	}
+	// approval + enabled + verify still fails without notify (the card can't be sent)
+	cfg.Verify.Enabled = true
+	cfg.Verify.Command = "verify-agent -p {issueKey}"
+	if err := config.Validate(cfg); err == nil {
+		t.Fatal("interact.approval without notify.enabled must fail")
+	}
+	// approval + enabled + verify + notify passes
+	cfg.Notify.Enabled = true
+	cfg.Notify.Target = "oc_chat"
+	if err := config.Validate(cfg); err != nil {
+		t.Fatalf("approval with enabled+verify+notify should pass, got %v", err)
+	}
+}
+
 func TestLoad_FileNotFound(t *testing.T) {
 	_, err := config.Load(filepath.Join(t.TempDir(), "missing.json"))
 	if err == nil {

@@ -29,6 +29,8 @@ type fakeTrigger struct {
 	err       error
 	outcome   string // defaults to auto-fix when empty
 	noMarker  bool   // set Result.NoMarker (agent finished without a marker)
+	awaiting  bool   // set Result.AwaitingApproval (held for human approval)
+	verdict   string // set Result.Verdict (e.g. refute for a downgrade)
 }
 
 func (f *fakeTrigger) Command() string {
@@ -46,7 +48,18 @@ func (f *fakeTrigger) Trigger(issueKey string) (agent.Result, error) {
 	if outcome == "" && !f.noMarker {
 		outcome = agent.OutcomeAutoFix
 	}
-	return agent.Result{Outcome: outcome, NoMarker: f.noMarker, MRURL: "https://gitlab.example/mr/1", HandoffPath: ".repo-knowledge/handoff/PROJ-1.needs-confirmation.md", ExitCode: 0, DurationMillis: 10}, nil
+	return agent.Result{Outcome: outcome, NoMarker: f.noMarker, AwaitingApproval: f.awaiting, Verdict: f.verdict, MRURL: "https://gitlab.example/mr/1", HandoffPath: ".repo-knowledge/handoff/PROJ-1.needs-confirmation.md", ExitCode: 0, DurationMillis: 10}, nil
+}
+
+type fakeApprovalRecorder struct {
+	mu       sync.Mutex
+	recorded []string
+}
+
+func (r *fakeApprovalRecorder) RecordAwaitingApproval(issueKey string, _ agent.Result) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.recorded = append(r.recorded, issueKey)
 }
 
 type fakeNotifier struct {
@@ -67,7 +80,7 @@ func TestPollOnce_TriggersNewIssues(t *testing.T) {
 	trigger := &fakeTrigger{}
 	st := state.New()
 
-	if err := poller.PollOnce(jira, trigger, st, emptyFilter, 3, 0, nil); err != nil {
+	if err := poller.PollOnce(jira, trigger, st, emptyFilter, 3, 0, poller.Hooks{}); err != nil {
 		t.Fatal(err)
 	}
 	if len(trigger.triggered) != 2 {
@@ -90,7 +103,7 @@ func TestPollOnce_SkipsKnownIssues(t *testing.T) {
 	st := state.New()
 	st.SetIssue("PROJ-1", state.StatusTriggered)
 
-	if err := poller.PollOnce(jira, trigger, st, emptyFilter, 3, 0, nil); err != nil {
+	if err := poller.PollOnce(jira, trigger, st, emptyFilter, 3, 0, poller.Hooks{}); err != nil {
 		t.Fatal(err)
 	}
 	if len(trigger.triggered) != 1 || trigger.triggered[0] != "PROJ-2" {
@@ -105,7 +118,7 @@ func TestPollOnce_DoesNotRetriggerDoneIssueWhenExpiryZero(t *testing.T) {
 	st.SetIssue("PROJ-1", state.StatusDone)
 	st.Issues["PROJ-1"].TriggeredAt = time.Now().Add(-100 * 24 * time.Hour)
 
-	if err := poller.PollOnce(jira, trigger, st, emptyFilter, 3, 0, nil); err != nil {
+	if err := poller.PollOnce(jira, trigger, st, emptyFilter, 3, 0, poller.Hooks{}); err != nil {
 		t.Fatal(err)
 	}
 	if len(trigger.triggered) != 0 {
@@ -129,7 +142,7 @@ func TestPollOnce_RecordsOutcomeStatus(t *testing.T) {
 			trigger := &fakeTrigger{outcome: tc.outcome}
 			st := state.New()
 
-			if err := poller.PollOnce(jira, trigger, st, emptyFilter, 3, 0, nil); err != nil {
+			if err := poller.PollOnce(jira, trigger, st, emptyFilter, 3, 0, poller.Hooks{}); err != nil {
 				t.Fatal(err)
 			}
 			if got := st.Issues["PROJ-1"].Status; got != tc.want {
@@ -144,7 +157,7 @@ func TestPollOnce_JiraError(t *testing.T) {
 	trigger := &fakeTrigger{}
 	st := state.New()
 
-	if err := poller.PollOnce(jira, trigger, st, emptyFilter, 3, 0, nil); err == nil {
+	if err := poller.PollOnce(jira, trigger, st, emptyFilter, 3, 0, poller.Hooks{}); err == nil {
 		t.Fatal("expected error from jira")
 	}
 }
@@ -154,7 +167,7 @@ func TestPollOnce_RecordsTriggerFailure(t *testing.T) {
 	trigger := &fakeTrigger{err: fmt.Errorf("agent failed")}
 	st := state.New()
 
-	if err := poller.PollOnce(jira, trigger, st, emptyFilter, 3, 0, nil); err != nil {
+	if err := poller.PollOnce(jira, trigger, st, emptyFilter, 3, 0, poller.Hooks{}); err != nil {
 		t.Fatal(err)
 	}
 	entry := st.Issues["PROJ-1"]
@@ -178,11 +191,59 @@ func TestPollOnce_ConcurrentTrigger(t *testing.T) {
 	trigger := &fakeTrigger{}
 	st := state.New()
 
-	if err := poller.PollOnce(jira, trigger, st, emptyFilter, 3, 0, nil); err != nil {
+	if err := poller.PollOnce(jira, trigger, st, emptyFilter, 3, 0, poller.Hooks{}); err != nil {
 		t.Fatal(err)
 	}
 	if len(trigger.triggered) != 10 {
 		t.Fatalf("expected 10 triggered, got %d", len(trigger.triggered))
+	}
+}
+
+func TestPollOnce_AwaitingApprovalRecordsAndHolds(t *testing.T) {
+	jira := &fakeJira{keys: []string{"PROJ-1"}}
+	trigger := &fakeTrigger{awaiting: true}
+	st := state.New()
+	rec := &fakeApprovalRecorder{}
+	notifier := &fakeNotifier{}
+
+	if err := poller.PollOnce(jira, trigger, st, emptyFilter, 3, 0, poller.Hooks{Notifier: notifier, ApprovalRecorder: rec}); err != nil {
+		t.Fatal(err)
+	}
+	if got := st.Issues["PROJ-1"].Status; got != state.StatusAwaitingApproval {
+		t.Fatalf("awaiting-approval status: got %q, want %q", got, state.StatusAwaitingApproval)
+	}
+	if len(rec.recorded) != 1 || rec.recorded[0] != "PROJ-1" {
+		t.Fatalf("approval recorder should be called for PROJ-1, got %v", rec.recorded)
+	}
+	if len(notifier.notified) != 0 {
+		t.Fatalf("awaiting-approval must not fire the fallback notifier, got %v", notifier.notified)
+	}
+}
+
+func TestRun_PausedSkipsPolling(t *testing.T) {
+	jira := &fakeJira{keys: []string{"PROJ-1"}}
+	trigger := &fakeTrigger{}
+	st := state.New()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		poller.Run(ctx, jira, trigger, st, emptyFilter, 30*time.Millisecond, "", 3, 0, poller.Hooks{Paused: func() bool { return true }})
+		close(done)
+	}()
+	time.Sleep(120 * time.Millisecond)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("poller did not stop after cancel")
+	}
+
+	trigger.mu.Lock()
+	n := len(trigger.triggered)
+	trigger.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("a paused poller must not trigger any fix, got %d", n)
 	}
 }
 
@@ -195,7 +256,7 @@ func TestRun_StopsOnContextCancel(t *testing.T) {
 	done := make(chan struct{})
 
 	go func() {
-		poller.Run(ctx, jira, trigger, st, emptyFilter, 50*time.Millisecond, "", 3, 0, nil)
+		poller.Run(ctx, jira, trigger, st, emptyFilter, 50*time.Millisecond, "", 3, 0, poller.Hooks{})
 		close(done)
 	}()
 
@@ -277,7 +338,7 @@ func TestPollOnce_RetriggersInterrupted(t *testing.T) {
 	lister := &fakeJira{keys: []string{"BUG-1"}}
 	trig := &fakeTrigger{}
 
-	if err := poller.PollOnce(lister, trig, st, emptyFilter, 3, 0, nil); err != nil {
+	if err := poller.PollOnce(lister, trig, st, emptyFilter, 3, 0, poller.Hooks{}); err != nil {
 		t.Fatal(err)
 	}
 	if len(trig.triggered) != 1 {
@@ -291,7 +352,7 @@ func TestPollOnce_FallbackNotifyOnNoMarker(t *testing.T) {
 	st := state.New()
 	notifier := &fakeNotifier{}
 
-	if err := poller.PollOnce(jira, trigger, st, emptyFilter, 3, 0, notifier); err != nil {
+	if err := poller.PollOnce(jira, trigger, st, emptyFilter, 3, 0, poller.Hooks{Notifier: notifier}); err != nil {
 		t.Fatal(err)
 	}
 	if got := st.Issues["PROJ-1"].Status; got != state.StatusDone {
@@ -302,13 +363,33 @@ func TestPollOnce_FallbackNotifyOnNoMarker(t *testing.T) {
 	}
 }
 
+func TestPollOnce_NotifiesOnRefuteDowngrade(t *testing.T) {
+	// A verifier/integrity refutation downgrades a proposal to auto-diagnose with a
+	// marker present (NoMarker=false). Phase B never ran, so no agent card was sent —
+	// the operator must still be notified, matching the interaction hub's finishRun.
+	jira := &fakeJira{keys: []string{"PROJ-1"}}
+	trigger := &fakeTrigger{outcome: agent.OutcomeAutoDiagnose, verdict: agent.VerdictRefute}
+	st := state.New()
+	notifier := &fakeNotifier{}
+
+	if err := poller.PollOnce(jira, trigger, st, emptyFilter, 3, 0, poller.Hooks{Notifier: notifier}); err != nil {
+		t.Fatal(err)
+	}
+	if got := st.Issues["PROJ-1"].Status; got != state.StatusWaiting {
+		t.Fatalf("a refuted proposal should be waiting, got %q", got)
+	}
+	if len(notifier.notified) != 1 || notifier.notified[0] != "PROJ-1" {
+		t.Fatalf("a refute downgrade must fire the fallback notify, got %v", notifier.notified)
+	}
+}
+
 func TestPollOnce_NoNotifyWhenMarkerSeen(t *testing.T) {
 	jira := &fakeJira{keys: []string{"PROJ-1"}}
 	trigger := &fakeTrigger{outcome: agent.OutcomeAutoFix} // marker seen ⇒ NoMarker=false
 	st := state.New()
 	notifier := &fakeNotifier{}
 
-	if err := poller.PollOnce(jira, trigger, st, emptyFilter, 3, 0, notifier); err != nil {
+	if err := poller.PollOnce(jira, trigger, st, emptyFilter, 3, 0, poller.Hooks{Notifier: notifier}); err != nil {
 		t.Fatal(err)
 	}
 	if len(notifier.notified) != 0 {
@@ -322,7 +403,7 @@ func TestPollOnce_NoNotifyOnError(t *testing.T) {
 	st := state.New()
 	notifier := &fakeNotifier{}
 
-	if err := poller.PollOnce(jira, trigger, st, emptyFilter, 3, 0, notifier); err != nil {
+	if err := poller.PollOnce(jira, trigger, st, emptyFilter, 3, 0, poller.Hooks{Notifier: notifier}); err != nil {
 		t.Fatal(err)
 	}
 	if st.Issues["PROJ-1"].Status != state.StatusFailed {

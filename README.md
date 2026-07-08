@@ -164,6 +164,12 @@ Config location: `~/.auto-bug-fix/config.json`.
     "enabled": true,
     "channel": "lark",
     "target": ""
+  },
+  "interact": {
+    "enabled": false,
+    "authorizedOpenIds": [],
+    "approval": false,
+    "timeoutHours": 24
   }
 }
 ```
@@ -184,6 +190,10 @@ Config location: `~/.auto-bug-fix/config.json`.
 | `notify.enabled` | `true` | Send a one-way completion card after each fix. On by default: the completion notification is the required human-in-the-loop hand-off, not a nicety. |
 | `notify.channel` | `lark` | Notification backend. Only `lark` (Lark/Feishu interactive card via `lark-cli`) is implemented today; the abstraction allows adding more later. |
 | `notify.target` | empty | **Required when `notify.enabled` is true.** Fallback recipient (`chat_id`/`open_id`) when the Jira assignee can't be resolved. No secrets — `lark-cli` owns Lark auth. |
+| `interact.enabled` | `false` | Opt-in bidirectional Feishu interaction: a card-callback listener in the daemon lets a human answer needs-info, approve/reject an MR, and control the poller from interactive cards. Requires `notify.enabled` (cards ride the notification channel). Feishu console callback configuration must be enabled (no preflight). |
+| `interact.authorizedOpenIds` | `[]` | **Required when `interact.enabled` is true.** Lark `open_id`s allowed to act on cards. Authorization is checked ONLY against the callback's server-delivered `operator_id`; card-carried values are untrusted. |
+| `interact.approval` | `false` | Add a human MR-approval gate AFTER the AI verifier upholds a fix (`awaiting-approval` → approve opens the MR, reject downgrades). Requires `verify.enabled` and `interact.enabled`. |
+| `interact.timeoutHours` | `24` | How long a pending interaction stays open before it is given up (reserved). |
 
 State lives at `~/.auto-bug-fix/state.json`; logs at `~/.auto-bug-fix/poller.log`; the PID file at `~/.auto-bug-fix/poller.pid`.
 

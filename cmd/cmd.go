@@ -22,13 +22,14 @@ import (
 	"github.com/fatecannotbealtered/auto-bug-fix/internal/doctor"
 	"github.com/fatecannotbealtered/auto-bug-fix/internal/guard"
 	"github.com/fatecannotbealtered/auto-bug-fix/internal/installer"
+	"github.com/fatecannotbealtered/auto-bug-fix/internal/listener"
 	"github.com/fatecannotbealtered/auto-bug-fix/internal/notify"
 	"github.com/fatecannotbealtered/auto-bug-fix/internal/poller"
 	"github.com/fatecannotbealtered/auto-bug-fix/internal/state"
 )
 
 // version is overridden at release time via -ldflags "-X .../cmd.version=<tag>".
-var version = "1.0.15"
+var version = "1.0.16"
 
 // schemaVersion is sourced from the canonical contract (contract/contract.json
 // via internal/contract/contract_gen.go) so the JSON schema version cannot
@@ -345,6 +346,12 @@ func defaultConfig(agentType string) map[string]any {
 			"channel": "lark",
 			"target":  "",
 		},
+		"interact": map[string]any{
+			"enabled":           false,
+			"authorizedOpenIds": []string{},
+			"approval":          false,
+			"timeoutHours":      config.DefaultInteractTimeoutHours,
+		},
 	}
 }
 
@@ -460,11 +467,46 @@ func runStart(args []string) {
 	log.Printf("[auto-bug-fix] Workspace root: %s (cleanup=%s)", cfg.Workspace.Root, cfg.Workspace.Cleanup)
 	log.Printf("[auto-bug-fix] Knowledge dir: %s (read=%t update=%t handoff=%t handoffDir=%s)", cfg.Knowledge.Dir, cfg.Knowledge.Read, cfg.Knowledge.Update, cfg.Knowledge.Handoff, cfg.Knowledge.HandoffDir)
 	log.Printf("[auto-bug-fix] Verify gate: enabled=%t", cfg.Verify.Enabled)
-	var notifier poller.Notifier
+	hooks := poller.Hooks{}
 	if cfg.Notify.Enabled {
-		notifier = fallbackNotifier{cfg: cfg}
+		hooks.Notifier = fallbackNotifier{cfg: cfg}
 	}
-	poller.Run(ctx, jira, trigger, st, cfg.Poll.Filter, interval, statePath, cfg.Poll.MaxConcurrent, cfg.Poll.StateExpiryDays, notifier)
+	// Bidirectional interaction: a long-lived listener consumes Feishu card
+	// callbacks alongside the poll loop, under the same ctx (so it stops on the same
+	// SIGTERM) and sharing the same mutex-guarded state. One hub implements the
+	// re-trigger (needs-info), approve/reject (MR gate), and pause/resume/rerun
+	// (control) roles.
+	if cfg.Interact.Enabled {
+		if !cfg.Notify.Enabled {
+			// The needs-info clarification and approval cards are delivered via the
+			// notification channel, so without notify no cards are ever sent.
+			log.Printf("[auto-bug-fix] WARNING interact.enabled but notify.enabled=false — no interaction cards will be sent; set notify.enabled=true")
+		}
+		hub := newInteractHub(trigger, st, statePath, cfg)
+		hooks.Paused = hub.Paused
+		deps := listener.Deps{
+			Consumer:          notify.LarkConsumer{},
+			State:             st,
+			StatePath:         statePath,
+			AuthorizedOpenIDs: cfg.Interact.AuthorizedOpenIDs,
+			Retrigger:         hub,
+			Controller:        hub,
+		}
+		if cfg.Interact.Approval {
+			hooks.ApprovalRecorder = hub
+			deps.Approver = hub
+		}
+		lis := listener.New(deps)
+		go func() {
+			if err := lis.Run(ctx); err != nil {
+				log.Printf("[auto-bug-fix] interact: listener error: %v", err)
+			}
+		}()
+		go hub.RunSweeper(ctx) // give up on unanswered approvals past interact.timeoutHours
+		hub.SendStatus("")     // send an initial control card to the operator
+		log.Printf("[auto-bug-fix] Interaction listener: enabled (approval=%t, %d authorized operator(s))", cfg.Interact.Approval, len(cfg.Interact.AuthorizedOpenIDs))
+	}
+	poller.Run(ctx, jira, trigger, st, cfg.Poll.Filter, interval, statePath, cfg.Poll.MaxConcurrent, cfg.Poll.StateExpiryDays, hooks)
 	log.Println("[auto-bug-fix] Stopped.")
 }
 
@@ -479,6 +521,10 @@ func agentOptions(cfg config.Config) agent.Options {
 		"AUTO_BUG_FIX_KNOWLEDGE_HANDOFF_DIR": cfg.Knowledge.HandoffDir,
 		"AUTO_BUG_FIX_NOTIFY_ENABLED":        strconv.FormatBool(cfg.Notify.Enabled),
 		"AUTO_BUG_FIX_NOTIFY_TARGET":         cfg.Notify.Target,
+		// Lets the agent's Step 8.5 `notify` render an interactive needs-info card
+		// (input box + callback) instead of the one-way card, so the daemon listener
+		// can receive the answer and re-trigger the fix.
+		"AUTO_BUG_FIX_INTERACT_ENABLED": strconv.FormatBool(cfg.Interact.Enabled),
 	}}
 }
 
@@ -486,6 +532,10 @@ func agentOptions(cfg config.Config) agent.Options {
 // per-ticket workflow to run (investigate / verify / execute). Absent = legacy
 // single-shot flow.
 const envPhase = "AUTO_BUG_FIX_PHASE"
+
+// envExtraContext carries human clarification answers into a re-triggered fix run
+// (all phases). The agent templates read it as untrusted prior-answer context.
+const envExtraContext = "AUTO_BUG_FIX_EXTRA_CONTEXT"
 
 // agentTrigger hosts the two-phase evidence gate. Its Trigger drives
 // guard.RunGuarded, and its spawn (a guard.SpawnFunc) wires per-phase command,
@@ -508,8 +558,9 @@ func newAgentTrigger(cfg config.Config) *agentTrigger {
 		verifierCommand: vcmd,
 		baseEnv:         agentOptions(cfg).Env,
 		guardCfg: guard.Config{
-			Enabled:       cfg.Verify.Enabled,
-			WorkspaceRoot: cfg.Workspace.Root,
+			Enabled:         cfg.Verify.Enabled,
+			WorkspaceRoot:   cfg.Workspace.Root,
+			RequireApproval: cfg.Interact.Approval,
 		},
 	}
 }
@@ -519,16 +570,47 @@ func (a *agentTrigger) Command() string {
 }
 
 func (a *agentTrigger) Trigger(issueKey string) (agent.Result, error) {
-	return guard.RunGuarded(issueKey, a.guardCfg, a.spawn)
+	return a.triggerWith(issueKey, nil)
 }
 
-// spawn implements guard.SpawnFunc: it selects the command, the marker prefixes the
-// live scanner kills on, and the AUTO_BUG_FIX_PHASE env for the given phase, then
-// merges guard's phase-specific env (expected head, diff path, etc.).
-func (a *agentTrigger) spawn(issueKey string, phase guard.Phase, extraEnv map[string]string) (agent.Result, error) {
+// TriggerWithContext re-runs a fix with humanContext (accumulated needs-info
+// answers) injected into every phase via AUTO_BUG_FIX_EXTRA_CONTEXT. Used by the
+// interaction listener after a human answers a clarification card.
+func (a *agentTrigger) TriggerWithContext(issueKey, humanContext string) (agent.Result, error) {
+	var extraBase map[string]string
+	if strings.TrimSpace(humanContext) != "" {
+		extraBase = map[string]string{envExtraContext: humanContext}
+	}
+	return a.triggerWith(issueKey, extraBase)
+}
+
+func (a *agentTrigger) triggerWith(issueKey string, extraBase map[string]string) (agent.Result, error) {
+	spawn := func(key string, phase guard.Phase, extraEnv map[string]string) (agent.Result, error) {
+		return a.spawn(key, phase, extraEnv, extraBase)
+	}
+	return guard.RunGuarded(issueKey, a.guardCfg, spawn)
+}
+
+// ExecuteApproved resumes Phase B (push + MR + Jira) for a proposal a human just
+// approved. guard.Execute re-checks integrity before running.
+func (a *agentTrigger) ExecuteApproved(issueKey string, proposal agent.Result) (agent.Result, error) {
+	spawn := func(key string, phase guard.Phase, extraEnv map[string]string) (agent.Result, error) {
+		return a.spawn(key, phase, extraEnv, nil)
+	}
+	return guard.Execute(issueKey, a.guardCfg, proposal, spawn)
+}
+
+// spawn selects the command, the marker prefixes the live scanner kills on, and the
+// AUTO_BUG_FIX_PHASE env for the given phase, then merges any run-wide extraBase
+// (e.g. injected human context) and guard's phase-specific extraEnv (expected head,
+// diff path, etc.). Wrapped into a guard.SpawnFunc by triggerWith.
+func (a *agentTrigger) spawn(issueKey string, phase guard.Phase, extraEnv, extraBase map[string]string) (agent.Result, error) {
 	command := a.command
 	prefixes := [][]byte{[]byte(agent.ResultMarkerPrefix)}
 	env := cloneEnv(a.baseEnv)
+	for k, v := range extraBase {
+		env[k] = v
+	}
 
 	switch phase {
 	case guard.PhaseFull:
@@ -575,7 +657,14 @@ func runFix(issueKey string, args []string) {
 	cfg := preflight(cfgPath)
 
 	log.Printf("[auto-bug-fix] Triggering fix for %s...", issueKey)
-	result, err := newAgentTrigger(cfg).Trigger(issueKey)
+	at := newAgentTrigger(cfg)
+	// The human MR-approval gate is a poller-only feature: it needs the daemon's
+	// listener to receive the approve/reject callback. A manual `fix <key>` is a
+	// deliberate human invocation (the operator is already approving by running it),
+	// so bypass the gate here — otherwise the fix would commit locally and hang at
+	// awaiting-approval with nothing to resume it.
+	at.guardCfg.RequireApproval = false
+	result, err := at.Trigger(issueKey)
 	if result.Outcome != "" {
 		log.Printf("[auto-bug-fix] Outcome: %s", result.Outcome)
 	}
@@ -727,12 +816,17 @@ func runNotify(args []string) {
 	if err != nil {
 		fail(exitUsage, "E_VALIDATION", "notify: "+err.Error(), nil, false)
 	}
-	card, err := ch.Render(notify.Params{
+	params := notify.Params{
 		Issue: *issue, Outcome: *outcome, Summary: *summary,
 		RootCause: *rootCause, Solution: *solution, MRURL: *mrURL, JiraURL: *jiraURL,
 		Service: *service, Branch: *branch, Duration: *duration,
 		Evidence: *evidence, TestStatus: *testStatus,
-	})
+	}
+	// When bidirectional interaction is enabled, a needs-info card becomes an
+	// interactive clarification card (input box + callback) so the daemon listener
+	// can receive the answer and re-trigger the fix. Any channel without callback
+	// support (or any other outcome) falls back to the one-way card.
+	card, err := renderNotifyCard(ch, params)
 	if err != nil {
 		fail(exitUsage, "E_VALIDATION", "notify: "+err.Error(), nil, false)
 	}
@@ -779,6 +873,18 @@ func runNotify(args []string) {
 		"recipient": recipient,
 		"outcome":   *outcome,
 	})
+}
+
+// renderNotifyCard picks the card variant: an interactive needs-info clarification
+// card when interaction is enabled and the channel supports callbacks, else the
+// fixed one-way card.
+func renderNotifyCard(ch notify.Channel, p notify.Params) (string, error) {
+	if p.Outcome == notify.OutcomeNeedsInfo && os.Getenv("AUTO_BUG_FIX_INTERACT_ENABLED") == "true" {
+		if ic, ok := ch.(notify.InteractiveChannel); ok {
+			return ic.RenderClarify(p, notify.Correlation{Action: "answer", Issue: p.Issue})
+		}
+	}
+	return ch.Render(p)
 }
 
 // ── stop / status ─────────────────────────────────────────────────────────────

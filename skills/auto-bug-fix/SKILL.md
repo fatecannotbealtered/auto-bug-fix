@@ -1,10 +1,10 @@
 ---
 name: auto-bug-fix
-version: 1.0.15
+version: 1.0.16
 description: "auto-bug-fix CLI for AI Agents operating an autonomous Jira Bug fix scheduler. Use for installing, configuring, preflighting, starting, stopping, updating, and auditing the scheduler; not for performing the per-ticket code repair directly."
 license: MIT
 user-invocable: true
-metadata: {"requires":{"bins":["auto-bug-fix"],"min_version":"1.0.15"}}
+metadata: {"requires":{"bins":["auto-bug-fix"],"min_version":"1.0.16"}}
 ---
 
 # auto-bug-fix
@@ -165,6 +165,8 @@ If a dependency CLI behavior is unclear, read that CLI's `reference --compact`; 
 
 `update` is a **single command, not a confirm-gated write**. A bare `auto-bug-fix update` performs the whole self-update in one call — resolve the latest (or `--target-version`), update the binary/package, then sync the Skill. There is no confirm token. `--check` and `--dry-run` are optional read-only flags; `update` is idempotent (already-latest returns `ok` with a no-op).
 
+Successful update results are final-state: `current_version` must equal `target_version`, `update_available` must be `false`, and stale `update_available` notices must be cleared or suppressed before later commands attach `meta.notices`. An already-current install must return a no-op result without running a package-manager install command.
+
 `update` routes by install method. An **npm-managed** install (binary under `node_modules`) updates via `npm install -g`; integrity is owned by the package manager (`signature_status: not_applicable_package_manager`). A **raw binary** self-updates from the signed GitHub release: it downloads the platform archive, `checksums.txt`, and `checksums.txt.sigstore.json`, verifies the cosign **Sigstore signature on `checksums.txt` in-process** (against this repo's tagged release-workflow identity, using sigstore-go's embedded TUF trust root — no external `cosign`, no user-environment dependency) **before** verifying the archive SHA256, then atomically replaces the running binary. Verification is **fail-closed**: a missing bundle, a signature that does not verify, an identity/issuer mismatch, or a checksum mismatch all abort with `E_INTEGRITY` (exit 1, non-retryable) — there is no "verify failed, proceed anyway" path. On success the result carries `signature_status: "verified"` and `signature_verified: true`; the staged failure envelope adds `verify_signature` and `verify_checksum` stages.
 
 Use the update flow when the user asks to update, when the Skill minimum version is higher than the binary, or when `update --check` reports an update:
@@ -177,7 +179,7 @@ auto-bug-fix changelog --since <previous_version> --compact
 auto-bug-fix reference --compact
 ```
 
-After update, confirm `skill_sync_status` is `synced`. If Skill sync fails, the result is a **partial success** (`ok:false`, `binary_replaced:true`, retryable): the package is already updated — run the returned `skill_sync_command`, then `changelog --since <previous_version>`, before using newly documented behavior. Every update failure carries `stage`, `current_version`, `binary_replaced`, and `skill_sync_status` so you always know the true post-state.
+After update, confirm `skill_sync_status` is `synced`. If Skill sync fails, the result is a **partial success** (`ok:false`, `binary_replaced:true`, retryable) with `target_version`, `update_available:false`, and `skill_sync_command`: the package is already updated — run the returned command, then `changelog --since <previous_version>`, before using newly documented behavior. Every update failure carries `stage`, `current_version`, `binary_replaced`, and `skill_sync_status` so you always know the true post-state.
 
 ## Playbooks
 

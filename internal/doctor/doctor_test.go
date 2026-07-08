@@ -29,6 +29,22 @@ func probeFake(out map[string]string) Probe {
 	}
 }
 
+func TestInteractCheck_WarnsWhenLarkCLIMissing(t *testing.T) {
+	cfg := config.Config{Interact: config.InteractConfig{Enabled: true}}
+	c := interactCheck(lookFake(map[string]bool{}), cfg)
+	if c.Level != Warn || !strings.Contains(c.Detail, "lark-cli") {
+		t.Fatalf("missing lark-cli must Warn, got %+v", c)
+	}
+}
+
+func TestInteractCheck_InfoReminderWhenLarkCLIPresent(t *testing.T) {
+	cfg := config.Config{Interact: config.InteractConfig{Enabled: true}}
+	c := interactCheck(lookFake(map[string]bool{"lark-cli": true}), cfg)
+	if c.Level != Info || !strings.Contains(c.Detail, "Callback Configuration") {
+		t.Fatalf("with lark-cli present, expect an Info console-config reminder, got %+v", c)
+	}
+}
+
 // tmplInstalled treats a known agentType as fully installed.
 func tmplInstalled(agentType string) ([]string, bool) {
 	if agentType == "" {

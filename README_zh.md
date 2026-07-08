@@ -164,6 +164,12 @@ auto-bug-fix update --compact           # 一次完成 包 + Skill 更新（无 
     "enabled": true,
     "channel": "lark",
     "target": ""
+  },
+  "interact": {
+    "enabled": false,
+    "authorizedOpenIds": [],
+    "approval": false,
+    "timeoutHours": 24
   }
 }
 ```
@@ -184,6 +190,10 @@ auto-bug-fix update --compact           # 一次完成 包 + Skill 更新（无 
 | `notify.enabled` | `true` | 修复后发一张单向完成卡片。默认开启：完成通知是必需的 human-in-the-loop 交接环节，而非可有可无。 |
 | `notify.channel` | `lark` | 通知后端。目前仅实现 `lark`（通过 `lark-cli` 发飞书交互卡片）；该抽象为后续接入更多渠道预留。 |
 | `notify.target` | 空 | **当 `notify.enabled` 为 true 时必填。** 当 Jira 经办人解析不到时的兜底接收者（`chat_id`/`open_id`）。不放密钥——飞书认证归 `lark-cli`。 |
+| `interact.enabled` | `false` | 可选的飞书双向交互：daemon 内的卡片回调监听器让人可以在交互卡上回答 needs-info、审批 MR、控制轮询。需 `notify.enabled`（卡片走通知通道下发）。飞书开发者后台的回调配置必须开启（无 preflight）。 |
+| `interact.authorizedOpenIds` | `[]` | **当 `interact.enabled` 为 true 时必填。** 允许操作卡片的 Lark `open_id`。授权**只**校验回调里服务端下发的 `operator_id`；卡片自带的值一律当作不可信数据。 |
+| `interact.approval` | `false` | 在 AI 验证者通过后再加一道人工 MR 审批门（`awaiting-approval` → 批准才开 MR，拒绝则降级）。需 `verify.enabled` 和 `interact.enabled`。 |
+| `interact.timeoutHours` | `24` | 待处理交互在被放弃前保留多久（预留）。 |
 
 状态文件在 `~/.auto-bug-fix/state.json`；日志在 `~/.auto-bug-fix/poller.log`；PID 文件在 `~/.auto-bug-fix/poller.pid`。
 

@@ -174,12 +174,33 @@ func Run(cfg config.Config, cfgErr error, look LookPath, probe Probe, tmpl Templ
 		}
 	}
 
+	// Interaction listener preflight: when bidirectional interaction is on, remind
+	// about the one setting that has NO preflight (the Feishu console callback
+	// config), and flag a missing lark-cli that would silence inbound callbacks.
+	// Advisory only (Warn/Info) — never blocks a running fix.
+	if cfg.Interact.Enabled {
+		checks = append(checks, interactCheck(look, cfg))
+	}
+
 	// Informational: surface where repos get cloned so the user is aware of the
 	// disk location (the default lives under home — C:\ on Windows). Never blocks.
 	if cfg.Workspace.Root != "" {
 		checks = append(checks, Check{"workspace", Info, "repos are cloned to " + cfg.Workspace.Root})
 	}
 	return checks
+}
+
+// interactCheck is the preflight for the interaction listener. lark is the only
+// channel with an inbound consumer today, so a missing lark-cli means callbacks
+// cannot be consumed (Warn). Otherwise it is an Info reminder about the Feishu
+// console callback configuration, which cannot be checked programmatically.
+func interactCheck(look LookPath, cfg config.Config) Check {
+	if cfg.Notify.Channel == "" || cfg.Notify.Channel == notify.DefaultChannel {
+		if _, err := look("lark-cli"); err != nil {
+			return Check{"interact", Warn, "lark-cli not on PATH; inbound card callbacks cannot be consumed — install lark-cli"}
+		}
+	}
+	return Check{"interact", Info, "enabled: ensure the Feishu console App→Events & Callbacks→Callback Configuration is ON (no preflight for this) or approve/answer cards will not work"}
 }
 
 // agentTemplateCheck verifies the subagent workflow template is installed for the

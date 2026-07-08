@@ -87,6 +87,52 @@ type Channel interface {
 	Send(recipient, payload string, run Runner) (ref string, err error)
 }
 
+// Correlation ties an interactive card's callback back to the run that sent it.
+// It is embedded in the card so the daemon listener knows which issue an action
+// belongs to. It is UNTRUSTED for authorization — only the callback's
+// server-delivered operator_id may be used to authorize an action.
+type Correlation struct {
+	Action string // verb the button performs, e.g. "answer"
+	Issue  string // Jira issue key the card is about
+}
+
+const actionNamePrefix = "abf"
+
+// EncodeActionName encodes a Correlation into a form submit button's `name`. A
+// form submit button carries no `behaviors` (so no action_value), but the callback
+// reports the triggered component's name as `action_name` — that is the only field
+// that can carry the correlation for a form submit. Issue keys contain no "|".
+func EncodeActionName(corr Correlation) string {
+	return actionNamePrefix + "|" + corr.Action + "|" + corr.Issue
+}
+
+// DecodeActionName parses a submit button `action_name` back into a Correlation.
+// ok is false for any name not produced by EncodeActionName.
+func DecodeActionName(name string) (corr Correlation, ok bool) {
+	parts := strings.SplitN(name, "|", 3)
+	if len(parts) != 3 || parts[0] != actionNamePrefix {
+		return Correlation{}, false
+	}
+	return Correlation{Action: parts[1], Issue: parts[2]}, true
+}
+
+// InteractiveChannel is an optional capability: a Channel that can also render a
+// Card-2.0 interactive clarification card carrying a callback the daemon listener
+// consumes. Channels without a callback back-end (e.g. email) simply do not
+// implement it, and callers fall back to the one-way Render.
+type InteractiveChannel interface {
+	Channel
+	// RenderClarify renders an interactive needs-info card: the agent's questions
+	// plus an input box and a submit button whose callback carries corr.
+	RenderClarify(p Params, corr Correlation) (payload string, err error)
+	// RenderApproval renders an MR-approval card: approve (callback) / reject (form
+	// with optional reason), correlated to corr, with a human-readable diff summary.
+	RenderApproval(p Params, diffSummary string, corr Correlation) (payload string, err error)
+	// RenderControl renders the poller control card: pause/resume/status buttons and
+	// a rerun form. statusSummary is a short poller snapshot.
+	RenderControl(statusSummary string) (payload string, err error)
+}
+
 var channels = map[string]Channel{}
 
 // register adds a channel implementation; called from each channel's init.

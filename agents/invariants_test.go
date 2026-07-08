@@ -48,6 +48,7 @@ func TestAgentTemplates_ShareLoadBearingPolicy(t *testing.T) {
 		{"two-phase: verify marker", []string{"AUTO_BUG_FIX_VERIFY"}},
 		{"investigate commits locally without pushing", []string{"no push", "do not push"}},
 		{"completion notification step (Lark) when enabled", []string{"AUTO_BUG_FIX_NOTIFY", "completion notification"}},
+		{"needs-info clarification answers injected on re-run", []string{"AUTO_BUG_FIX_EXTRA_CONTEXT"}},
 	}
 
 	for agentName, path := range agentTemplates() {

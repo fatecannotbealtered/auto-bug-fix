@@ -238,6 +238,70 @@ func TestRunGuarded_IntegrityFieldsDowngrade(t *testing.T) {
 	}
 }
 
+func TestRunGuarded_ApprovalHoldsBeforeExecute(t *testing.T) {
+	dir, base, branch, head := setupRepo(t)
+	f := newFake()
+	f.results[guard.PhaseInvestigate] = proposal(dir, base, branch, head)
+	f.results[guard.PhaseVerify] = agent.Result{MarkerKind: agent.MarkerVerify, Verdict: agent.VerdictUphold}
+	f.results[guard.PhaseExecute] = agent.Result{MarkerKind: agent.MarkerResult, Outcome: agent.OutcomeAutoFix, MRURL: "https://x/mr/should-not-happen"}
+
+	cfg := guard.Config{Enabled: true, WorkspaceRoot: filepath.Dir(dir), RequireApproval: true}
+	res, err := guard.RunGuarded("PROJ-1", cfg, f.spawn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []guard.Phase{guard.PhaseInvestigate, guard.PhaseVerify}
+	if !equalPhases(f.phases, want) {
+		t.Fatalf("phases: got %v, want %v (execute must be held for approval)", f.phases, want)
+	}
+	if !res.AwaitingApproval {
+		t.Fatal("upheld proposal under approval gate must set AwaitingApproval")
+	}
+	if res.MRURL != "" {
+		t.Fatalf("no MR should exist while awaiting approval, got %q", res.MRURL)
+	}
+	if res.Head != head || res.Workspace != dir || res.Branch != branch || res.Base != base {
+		t.Fatalf("proposal fields must survive for a later Execute, got %+v", res)
+	}
+}
+
+func TestExecute_ResumesPhaseBOnApprove(t *testing.T) {
+	dir, base, branch, head := setupRepo(t)
+	f := newFake()
+	f.results[guard.PhaseExecute] = agent.Result{MarkerKind: agent.MarkerResult, Outcome: agent.OutcomeAutoFix, MRURL: "https://x/mr/42"}
+	cfg := guard.Config{Enabled: true, WorkspaceRoot: filepath.Dir(dir), RequireApproval: true}
+
+	res, err := guard.Execute("PROJ-1", cfg, proposal(dir, base, branch, head), f.spawn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !equalPhases(f.phases, []guard.Phase{guard.PhaseExecute}) {
+		t.Fatalf("Execute should run only Phase B, got %v", f.phases)
+	}
+	if res.MRURL != "https://x/mr/42" {
+		t.Fatalf("expected executed MR, got %+v", res)
+	}
+}
+
+func TestExecute_IntegrityRecheckDowngrades(t *testing.T) {
+	dir, base, branch, _ := setupRepo(t)
+	f := newFake()
+	// HEAD moved / mismatched since verification: Execute must refuse and downgrade.
+	bad := proposal(dir, base, branch, "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
+	cfg := guard.Config{Enabled: true, WorkspaceRoot: filepath.Dir(dir), RequireApproval: true}
+
+	res, err := guard.Execute("PROJ-1", cfg, bad, f.spawn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.phases) != 0 {
+		t.Fatalf("execute must be skipped on integrity re-check failure, got %v", f.phases)
+	}
+	if res.Outcome != agent.OutcomeAutoDiagnose || res.Verdict != agent.VerdictRefute {
+		t.Fatalf("expected integrity-recheck downgrade, got %+v", res)
+	}
+}
+
 func equalPhases(a, b []guard.Phase) bool {
 	if len(a) != len(b) {
 		return false

@@ -152,6 +152,8 @@ func runUpdate(args []string) {
 		result.Status = "up_to_date"
 		result.SkillSyncStatus = "skipped"
 		result.PreviousVersion = result.CurrentVersion
+		result.Notices = nil
+		writeUpdateCache(result)
 		printUpdate(result)
 		return
 	}
@@ -182,7 +184,9 @@ func runUpdateNPM(ctx context.Context, result updateResult) {
 	// Past the atomic commit point: the package is now the new version.
 	result.PreviousVersion = result.CurrentVersion
 	result.CurrentVersion = result.TargetVersion
+	result.UpdateAvailable = false
 	result.BinaryReplaced = true
+	writeUpdateCache(result)
 
 	// skill_sync stage: runs AFTER the replace and is independently replayable.
 	// A failure here is partial success, not a hard error — the package already
@@ -294,11 +298,13 @@ func runUpdateBinary(ctx context.Context, result updateResult) {
 	// Past the atomic swap point: the binary is now the new version.
 	result.PreviousVersion = result.CurrentVersion
 	result.CurrentVersion = result.TargetVersion
+	result.UpdateAvailable = false
 	result.BinaryReplaced = true
 	result.SignatureStatus = signatureStatus
 	result.SignatureVerified = signatureStatus == "verified"
 	result.ChecksumVerified = true
 	result.Path = applied.Path
+	writeUpdateCache(result)
 
 	// skill_sync runs AFTER the swap. A failure here is PARTIAL SUCCESS: the
 	// binary is on the new version, only the Skill is stale.
@@ -408,6 +414,8 @@ func failBinaryReplace(result updateResult, err error) {
 func failSkillSync(result updateResult, err error) {
 	details := updateFailureDetails(stageSkillSync, result.CurrentVersion, true, "failed")
 	details["previous_version"] = result.PreviousVersion
+	details["target_version"] = result.TargetVersion
+	details["update_available"] = false
 	details["skill_sync_command"] = result.SkillSyncCommand
 	fail(exitNetwork, "E_NETWORK", "updated to "+result.CurrentVersion+" but Skill sync failed; run the skill_sync_command, then changelog --since "+result.PreviousVersion+": "+err.Error(), details, true)
 }
