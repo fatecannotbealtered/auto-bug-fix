@@ -31,6 +31,14 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   silent fallback made a fail-closed drift guard answer differently depending on
   what was installed. A missing formatter is now an error with exit 2.
 
+### Fixed
+
+- **The release path now gates on the same checks as the merge path.**
+  `release.yml` re-ran formatting, vet and tests at tag time but never ran
+  `govulncheck` or `check-spec.js`, so a CVE published after the last green run
+  on main shipped signed and published. It now runs both, Linux-only, before
+  the build.
+
 ## [1.0.16] - 2026-07-08
 
 ### Added
